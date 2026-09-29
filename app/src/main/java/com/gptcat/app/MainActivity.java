@@ -49,6 +49,8 @@ public class MainActivity extends Activity {
         progressBar = findViewById(R.id.progressBar);
         webView = findViewById(R.id.webView);
         injectJs = loadRawInject();
+        // 图片桥：inject.js 点击对话大图时把图片交给原生查看页
+        webView.addJavascriptInterface(new GptCatBridge(), "GptCatBridge");
 
         // 状态栏图标用深色（白底上才看得清）
         if (Build.VERSION.SDK_INT >= 30) {
@@ -197,6 +199,17 @@ public class MainActivity extends Activity {
             webView.restoreState(savedInstanceState);
         } else {
             webView.loadUrl(HOME_URL);
+        }
+    }
+
+    // JS 桥：点击对话图片 → 启动原生全屏查看页(可保存到相册)
+    private class GptCatBridge {
+        @JavascriptInterface
+        public void openImage(String payload) {
+            if (payload == null || payload.isEmpty()) return;
+            Intent i = new Intent(MainActivity.this, ImageViewerActivity.class);
+            i.putExtra("image", payload);
+            startActivity(i);
         }
     }
 

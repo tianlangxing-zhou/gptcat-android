@@ -34,7 +34,7 @@ echo "[3/8] aapt2 链接 (生成 R.java + 未签名 APK)"
 echo "[4/8] javac 编译 Java"
 "$JDK/bin/javac" -encoding UTF-8 -cp "$PLATFORM" -d "$BUILD/classes" \
   "$BUILD/gen/com/gptcat/app/R.java" \
-  "$SRC/java/com/gptcat/app/MainActivity.java"
+  $(find "$SRC/java" -name '*.java')
 
 echo "[5/8] d8 转 dex"
 mkdir -p "$BUILD/dex"

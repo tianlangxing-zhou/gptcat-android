@@ -119,6 +119,37 @@
     open = false;
   }
 
+  // 点击对话里生成的图片 → 原生全屏查看 + 保存到相册
+  function hookImages() {
+    if (window.__gcImgHook) return;
+    window.__gcImgHook = true;
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t || t.tagName !== 'IMG') return;
+      if (t.closest && t.closest('#gcFab,#gcMenu,[class*="avatar"],[class*="toolbar"],[class*="header"],[class*="sider"]')) return;
+      var r = t.getBoundingClientRect();
+      var big = (t.naturalWidth >= 200) || (r.width >= 160);
+      if (!big) return;
+      var src = t.currentSrc || t.src;
+      if (!src) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (src.indexOf('blob:') === 0 || src.indexOf('data:image') === 0) {
+        try {
+          var cv = document.createElement('canvas');
+          cv.width = t.naturalWidth || t.width;
+          cv.height = t.naturalHeight || t.height;
+          cv.getContext('2d').drawImage(t, 0, 0);
+          window.GptCatBridge.openImage(cv.toDataURL('image/png'));
+        } catch (err) {
+          if (src.indexOf('http') === 0) window.GptCatBridge.openImage(src);
+        }
+      } else {
+        window.GptCatBridge.openImage(src);
+      }
+    }, true);
+  }
+
   // 强制白底黑字（用户要求：APP 内页面白底黑字）
   function applyLightTheme() {
     if (document.getElementById('gc-light')) return;
@@ -139,6 +170,7 @@
   // SPA 路由/重渲染后自动增删，保证只在功能页出现
   function ensure() {
     applyLightTheme();
+    hookImages();
     if (!available()) { destroy(); return; }
     if (!document.body.contains(fab)) build();
   }
