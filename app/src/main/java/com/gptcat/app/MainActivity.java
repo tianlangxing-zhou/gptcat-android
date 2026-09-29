@@ -4,13 +4,17 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -30,6 +34,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 防止 WebView 未加载时透出深色窗口背景造成“黑屏”
+        getWindow().setBackgroundDrawable(new ColorDrawable(Color.WHITE));
         setContentView(R.layout.activity_main);
 
         progressBar = findViewById(R.id.progressBar);
@@ -67,12 +73,15 @@ public class MainActivity extends Activity {
 
             private boolean handleUrl(WebView view, String url) {
                 if (url == null) return false;
+                if (url.startsWith("reload://")) { // 错误页里的“重试”
+                    view.reload();
+                    return true;
+                }
                 Uri uri = Uri.parse(url);
                 String host = uri.getHost();
-                boolean sameSite = host != null &&
-                        (host.equals("share.gptcat.cc") || host.endsWith(".share.gptcat.cc"));
-                if (sameSite) {
-                    return false; // 站内链接：WebView 内打开
+                // 同属 gptcat.cc 域（share / chat2 等子域及 302 跳转）均在 WebView 内打开
+                if (host != null && host.endsWith(".gptcat.cc")) {
+                    return false;
                 }
                 // 站外链接：交给系统浏览器
                 try {
@@ -92,6 +101,27 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 progressBar.setVisibility(View.GONE);
             }
+
+            // 网络层错误（DNS/连接/超时等）：WebView 会显示默认错误页，这里换成可读提示
+            @Override
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                showError("网络错误 (" + errorCode + ")：" + description);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    showError("网络错误 (" + error.getErrorCode() + ")：" + error.getDescription());
+                }
+            }
+
+            // HTTP 层错误（如 403/404/500）
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
+                if (request.isForMainFrame()) {
+                    showError("服务器返回 HTTP " + response.getStatusCode());
+                }
+            }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
@@ -103,7 +133,7 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean onShowFileChooser(WebView wv, ValueCallback<Uri[]> cb,
-                                              FileChooserParams fp) {
+                                             FileChooserParams fp) {
                 if (uploadCallback != null) uploadCallback.onReceiveValue(null);
                 uploadCallback = cb;
                 try {
@@ -121,6 +151,21 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl(HOME_URL);
         }
+    }
+
+    // 本地错误页：白底、可读原因、带重试按钮（点击 reload:// 触发 handleUrl 重新加载）
+    private void showError(String msg) {
+        String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                + "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                + "<style>body{font-family:-apple-system,Segoe UI,sans-serif;background:#fff;color:#222;"
+                + "padding:28px;text-align:center}h2{color:#c0392b}"
+                + ".t{color:#888;font-size:13px;margin-top:10px}"
+                + ".btn{display:inline-block;margin-top:18px;padding:11px 22px;background:#1f6feb;"
+                + "color:#fff;border-radius:8px;text-decoration:none;font-size:15px}</style></head>"
+                + "<body><h2>页面打不开</h2><p>" + msg + "</p>"
+                + "<p class='t'>多为网络/代理问题：检查 WiFi，或手机代理(Clash)是否把该域名路由到了不可达节点。</p>"
+                + "<a class='btn' href='reload://retry'>点击重试</a></body></html>";
+        webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
     }
 
     @Override

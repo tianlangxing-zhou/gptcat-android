@@ -15,7 +15,7 @@ BUILD=$ROOT/build
 OUT=$ROOT/output
 KEYSTORE=$SRC/gptcat.keystore
 
-mkdir -p "$BUILD" "$OUT"
+rm -rf "$BUILD"; mkdir -p "$BUILD" "$OUT"
 
 echo "[1/8] 生成 launcher 图标"
 "$PYTHON" "$ROOT/gen_icons.py"
