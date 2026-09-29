@@ -9,8 +9,8 @@
         android:id="@+id/iv"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:scaleType="fitCenter"
-        android:contentDescription="@string/image_description" />
+        android:contentDescription="@string/image_description"
+        android:scaleType="fitCenter" />
 
     <ProgressBar
         android:id="@+id/imageLoading"
@@ -19,33 +19,50 @@
         android:layout_gravity="center"
         android:indeterminate="true" />
 
-    <Button
-        android:id="@+id/btnClose"
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top|start"
-        android:layout_margin="12dp"
-        android:background="@android:color/transparent"
-        android:textColor="#FFFFFF"
-        android:shadowColor="#000000"
-        android:shadowDx="0"
-        android:shadowDy="0"
-        android:shadowRadius="6"
-        android:text="@string/image_close" />
+        android:layout_gravity="top"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="10dp">
 
-    <Button
-        android:id="@+id/btnSave"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|center_horizontal"
-        android:layout_margin="16dp"
-        android:enabled="false"
-        android:background="@android:color/transparent"
-        android:textColor="#FFFFFF"
-        android:shadowColor="#000000"
-        android:shadowDx="0"
-        android:shadowDy="0"
-        android:shadowRadius="6"
-        android:text="@string/image_save" />
+        <Button
+            android:id="@+id/btnClose"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:background="@drawable/viewer_action_bg"
+            android:elevation="2dp"
+            android:minWidth="0dp"
+            android:minHeight="44dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="@string/image_close"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF" />
+
+        <Space
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:background="@drawable/viewer_action_bg"
+            android:elevation="2dp"
+            android:enabled="false"
+            android:minWidth="0dp"
+            android:minHeight="44dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="@string/image_save"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF" />
+    </LinearLayout>
 
 </FrameLayout>

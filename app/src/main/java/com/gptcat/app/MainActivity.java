@@ -1,6 +1,7 @@
 package com.gptcat.app;
 
 import android.app.Activity;
+import android.content.ComponentCallbacks2;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
@@ -23,8 +24,10 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         getWindow().setBackgroundDrawable(new ColorDrawable(Color.WHITE));
         setContentView(R.layout.activity_main);
+
         FrameLayout root = findViewById(R.id.root);
         WindowInsetsHelper.apply(this, root, true);
+
         fileChooser = new FileChooserHandler(this);
         ProgressBar progress = findViewById(R.id.progressBar);
         browser = new BrowserController(this, root, progress, fileChooser);
@@ -33,14 +36,14 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (!fileChooser.onActivityResult(requestCode, resultCode, data)) {
+        if (fileChooser == null || !fileChooser.onActivityResult(requestCode, resultCode, data)) {
             super.onActivityResult(requestCode, resultCode, data);
         }
     }
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        browser.saveState(outState);
+        if (browser != null) browser.saveState(outState);
         super.onSaveInstanceState(outState);
     }
 
@@ -57,15 +60,29 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onTrimMemory(int level) {
+        if (browser != null) browser.onTrimMemory(level);
+        super.onTrimMemory(level);
+    }
+
+    @Override
+    public void onLowMemory() {
+        if (browser != null) browser.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
+        super.onLowMemory();
+    }
+
+    @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_BACK && browser.goBack()) return true;
+        if (keyCode == KeyEvent.KEYCODE_BACK && browser != null && browser.goBack()) return true;
         return super.onKeyDown(keyCode, event);
     }
 
     @Override
     protected void onDestroy() {
-        fileChooser.cancel();
-        browser.destroy();
+        if (fileChooser != null) fileChooser.cancel();
+        if (browser != null) browser.destroy();
+        browser = null;
+        fileChooser = null;
         super.onDestroy();
     }
 }

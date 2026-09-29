@@ -2,21 +2,28 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#FFFFFF">
 
     <WebView
         android:id="@+id/webView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:background="#FFFFFF"
+        android:overScrollMode="ifContentScrolls"
+        android:scrollbarStyle="insideOverlay" />
 
     <ProgressBar
         android:id="@+id/progressBar"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="4dp"
+        android:layout_height="2dp"
         android:layout_gravity="top"
         android:max="100"
+        android:minHeight="2dp"
+        android:maxHeight="2dp"
+        android:splitTrack="false"
         android:visibility="gone"
-        android:progressTint="#1f6feb" />
+        android:progressTint="#1F6FEB" />
 
 </FrameLayout>

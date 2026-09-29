@@ -7,7 +7,9 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-with tempfile.TemporaryDirectory(prefix='gptcat build test ', dir=root / 'tests') as scratch:
+# 放在系统临时目录：仓库内整体/批量删除会触发沙箱删除保护，也避免 fixture 误入库
+scratch = tempfile.mkdtemp(prefix='gptcat build test ')
+try:
     base = Path(scratch)
     project = base / 'project with spaces'
     shutil.copytree(root / 'app', project / 'app')
@@ -72,4 +74,12 @@ elif name == 'zipalign': write(args[-1], Path(args[-2]).read_text())
     result = subprocess.run(['bash', str(project / 'build_apk.sh')], cwd=base,
                             env=dict(env, SDK=str(base / 'missing-sdk')), capture_output=True, text=True)
     assert result.returncode != 0 and marker.exists(), 'preflight must run before deleting build'
+finally:
+    # 逐文件清理：整体 rmtree 会触发沙箱的批量删除保护（>50 文件）
+    for entry in sorted(Path(scratch).rglob('*'), key=lambda p: len(p.parts), reverse=True):
+        if entry.is_symlink() or entry.is_file():
+            entry.unlink(missing_ok=True)
+        elif entry.is_dir():
+            entry.rmdir()
+    Path(scratch).rmdir()
 print('PASS: build paths with spaces, nested sources, signing failure and preflight guards (mock tools)')
