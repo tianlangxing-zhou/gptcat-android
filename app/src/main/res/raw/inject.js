@@ -5,7 +5,11 @@
   if (window.__gcInjected) return;
   window.__gcInjected = true;
 
+  // 顶部模型选择按钮的匹配关键词（模型名动态变化：GPT-4O-mini / ChatGPT 5.6 Sol 等）
+  var MODEL_KEYWORDS = ['GPT', 'Gemini', 'Claude', 'Deepseek', 'Grok', 'Auto'];
+
   var ITEMS = [
+    { key: '__model__', icon: '🤖', label: '切换模型' },
     { key: 'GPT官方镜像', icon: '🪞' },
     { key: '香蕉 2 绘图', icon: '🍌' },
     { key: '深度研究', icon: '🔍' },
@@ -40,6 +44,32 @@
     return true;
   }
 
+  // 打开顶部模型选择下拉：只匹配视口内顶部 header 的元素，
+  // 排除隐藏抽屉/侧栏/弹层（naive-ui 抽屉 DOM 常驻但被移出视口）
+  function openModelMenu() {
+    var nodes = document.querySelectorAll('div,span,button,p');
+    var cand = null, candTop = 1e9;
+    var W = window.innerWidth;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var t = (n.textContent || '').trim();
+      if (!t || t.length > 40) continue;
+      var hit = false;
+      for (var j = 0; j < MODEL_KEYWORDS.length; j++) {
+        if (t.indexOf(MODEL_KEYWORDS[j]) !== -1) { hit = true; break; }
+      }
+      if (!hit) continue;
+      if (n.closest && n.closest('[class*="drawer"],[class*="sider"],[class*="dropdown"],[class*="popover"],[class*="menu"]')) continue;
+      var r = n.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      if (r.left < 0 || r.right > W) continue;
+      if (r.top < 0 || r.top > 260) continue;
+      if (cand && cand.contains(n)) { cand = n; continue; }
+      if (r.top < candTop) { cand = n; candTop = r.top; }
+    }
+    if (cand) clickEl(cand);
+  }
+
   var fab = null, menu = null, open = false;
 
   function build() {
@@ -58,9 +88,10 @@
       + 'box-shadow:0 6px 24px rgba(0,0,0,.15);padding:6px;min-width:150px;';
     ITEMS.forEach(function (it) {
       var row = document.createElement('div');
-      row.textContent = it.icon + '  ' + it.key;
+      row.textContent = it.icon + '  ' + (it.label || it.key);
       row.style.cssText = 'padding:10px 14px;border-radius:8px;font-size:14px;color:#1f2937;cursor:pointer;';
       row.addEventListener('click', function () {
+        if (it.key === '__model__') { openModelMenu(); hide(); return; }
         var el = findByText(it.key);
         if (el) { clickEl(el); hide(); }
       });
@@ -86,8 +117,24 @@
     open = false;
   }
 
+  // 上报页面背景色给原生，让状态栏区域颜色跟随页面主题
+  function reportBg() {
+    try {
+      var bridge = window.GptCatBridge;
+      if (!bridge) return;
+      var col = getComputedStyle(document.body).backgroundColor;
+      if (!col || col === 'rgba(0, 0, 0, 0)' || col === 'transparent') {
+        col = getComputedStyle(document.documentElement).backgroundColor;
+      }
+      if (col && col !== 'rgba(0, 0, 0, 0)' && col !== 'transparent') {
+        bridge.reportBg(col);
+      }
+    } catch (e) { }
+  }
+
   // SPA 路由/重渲染后自动增删，保证只在功能页出现
   function ensure() {
+    reportBg();
     if (!available()) { destroy(); return; }
     if (!document.body.contains(fab)) build();
   }

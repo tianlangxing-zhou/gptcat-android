@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -19,8 +20,11 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.ProgressBar;
+import android.graphics.Insets;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -34,17 +38,32 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private ValueCallback<Uri[]> uploadCallback;
     private String injectJs;
+    private volatile int lastBg = Integer.MIN_VALUE;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 防止 WebView 未加载时透出深色窗口背景造成“黑屏”
-        getWindow().setBackgroundDrawable(new ColorDrawable(Color.WHITE));
+        // 状态栏区域颜色与图标深浅跟随系统夜间模式（页面内容由布局 fitsSystemWindows 避开状态栏）
+        boolean nightMode = (getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        getWindow().setBackgroundDrawable(new ColorDrawable(nightMode ? 0xFF141414 : Color.WHITE));
         setContentView(R.layout.activity_main);
 
         progressBar = findViewById(R.id.progressBar);
         webView = findViewById(R.id.webView);
         injectJs = loadRawInject();
+        // 网页主题桥：页面把背景色报上来，状态栏区域随之变色（API35 透明状态栏下窗口背景即状态栏底色）
+        webView.addJavascriptInterface(new BgBridge(), "GptCatBridge");
+
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                // 深色页面配浅色(白)状态栏图标；浅色页面配深色图标
+                int appearance = nightMode ? 0 : WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
+                c.setSystemBarsAppearance(appearance, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+            }
+        }
 
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
@@ -160,6 +179,51 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl(HOME_URL);
         }
+    }
+
+    // JS 桥：网页上报背景色 → 状态栏区域颜色与图标深浅跟随页面主题
+    private class BgBridge {
+        @JavascriptInterface
+        public void reportBg(final String color) {
+            final int c = parseColor(color);
+            if (c == lastBg) return;
+            lastBg = c;
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    getWindow().setBackgroundDrawable(new ColorDrawable(c));
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        WindowInsetsController ctr = getWindow().getInsetsController();
+                        if (ctr != null) {
+                            int lum = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+                            int appearance = lum > 140
+                                    ? WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0;
+                            ctr.setSystemBarsAppearance(appearance,
+                                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    // 支持 "#rrggbb" / "rgb(r,g,b)" / "rgba(r,g,b,a)"
+    private static int parseColor(String s) {
+        try {
+            s = s.trim();
+            if (s.startsWith("#")) return Color.parseColor(s);
+            if (s.startsWith("rgb")) {
+                String nums = s.substring(s.indexOf('(') + 1, s.indexOf(')'));
+                String[] p = nums.split(",");
+                int r = Integer.parseInt(p[0].trim());
+                int g = Integer.parseInt(p[1].trim());
+                int b = Integer.parseInt(p[2].trim());
+                int a = 255;
+                if (p.length > 3) a = (int) (Float.parseFloat(p[3].trim()) * 255);
+                return Color.argb(a, r, g, b);
+            }
+        } catch (Exception ignored) { }
+        return Color.WHITE;
     }
 
     private String loadRawInject() {
