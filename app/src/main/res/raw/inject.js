@@ -120,31 +120,65 @@
   }
 
   // 点击对话里生成的图片 → 原生全屏查看 + 保存到相册
+  // 站点常在图片上盖透明覆盖层/工具条，click 的 target 未必是 <img>：
+  // 依次回退 closest('img') → 按点击坐标反查被覆盖的大图 → 容器背景图
   function hookImages() {
     if (window.__gcImgHook) return;
     window.__gcImgHook = true;
     document.addEventListener('click', function (e) {
       var t = e.target;
-      if (!t || t.tagName !== 'IMG') return;
-      if (t.closest && t.closest('#gcFab,#gcMenu,[class*="avatar"],[class*="toolbar"],[class*="header"],[class*="sider"]')) return;
-      var r = t.getBoundingClientRect();
-      var big = (t.naturalWidth >= 200) || (r.width >= 160);
-      if (!big) return;
-      var src = t.currentSrc || t.src;
+      if (!t || !t.closest) return;
+      if (t.closest('#gcFab,#gcMenu,[class*="avatar"]')) return;
+      var img = null, src = null, minW = 160;
+      var direct = t.closest('img');
+      if (direct) {
+        var r0 = direct.getBoundingClientRect();
+        if ((direct.naturalWidth || 0) < 200 && r0.width < minW) return;
+        img = direct;
+        src = img.currentSrc || img.src;
+      }
+      if (!src) {
+        // 覆盖层挡住图片：按点击坐标找视口内被覆盖的大图
+        var x = e.clientX, y = e.clientY;
+        var all = document.querySelectorAll('img');
+        for (var k = 0; k < all.length; k++) {
+          var r = all[k].getBoundingClientRect();
+          if (r.width < minW) continue;
+          if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+            img = all[k];
+            src = img.currentSrc || img.src;
+            break;
+          }
+        }
+      }
+      if (!src) {
+        // 图片不是 <img> 而是容器背景图
+        var el = t;
+        for (var i = 0; i < 4 && el; i++) {
+          var bi = getComputedStyle(el).backgroundImage;
+          if (bi && bi.indexOf('url(') === 0) {
+            src = bi.slice(bi.indexOf('(') + 1).replace(/["']/g, '').replace(/\)$/, '');
+            break;
+          }
+          el = el.parentElement;
+        }
+      }
       if (!src) return;
       e.preventDefault();
       e.stopPropagation();
-      if (src.indexOf('blob:') === 0 || src.indexOf('data:image') === 0) {
+      var isData = src.indexOf('data:image') === 0;
+      var isBlob = src.indexOf('blob:') === 0;
+      if ((isData || isBlob) && img) {
         try {
           var cv = document.createElement('canvas');
-          cv.width = t.naturalWidth || t.width;
-          cv.height = t.naturalHeight || t.height;
-          cv.getContext('2d').drawImage(t, 0, 0);
+          cv.width = img.naturalWidth || img.width || 512;
+          cv.height = img.naturalHeight || img.height || 512;
+          cv.getContext('2d').drawImage(img, 0, 0);
           window.GptCatBridge.openImage(cv.toDataURL('image/png'));
-        } catch (err) {
-          if (src.indexOf('http') === 0) window.GptCatBridge.openImage(src);
-        }
-      } else {
+          return;
+        } catch (err) { /* canvas 被跨域污染 → 走 URL */ }
+      }
+      if (isData || src.indexOf('http') === 0) {
         window.GptCatBridge.openImage(src);
       }
     }, true);
@@ -163,6 +197,7 @@
       + '{background-color:#ffffff !important;color:#1f1f1f !important}'
       + 'input,textarea,[contenteditable="true"]{background:#ffffff !important;color:#111111 !important;'
       + 'border:1px solid #d0d0d0 !important}'
+      + 'button,[role="button"]{background-color:#ffffff !important;color:#1f1f1f !important}'
       + 'a,span,p,h1,h2,h3,h4,h5,h6{color:#1f1f1f !important}';
     (document.head || document.documentElement).appendChild(s);
   }

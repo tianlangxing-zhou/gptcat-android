@@ -5,11 +5,15 @@ import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Matrix;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
+import android.view.View;
 import android.webkit.CookieManager;
 import android.widget.Button;
 import android.widget.ImageView;
@@ -20,11 +24,15 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-// 点击对话图片后进入的全屏查看页：可缩放查看 + 一键保存到相册(DCIM/Pictures/GPTCat)
+// 点击对话图片后进入的全屏查看页：双指缩放/单指拖动 + 一键保存到相册
 public class ImageViewerActivity extends Activity {
 
     private ImageView imageView;
     private Bitmap current;
+    private final Matrix matrix = new Matrix();
+    private ScaleGestureDetector scaleDetector;
+    private float lastX, lastY;
+    private boolean dragging = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -35,10 +43,11 @@ public class ImageViewerActivity extends Activity {
         Button save = findViewById(R.id.btnSave);
         close.setOnClickListener(v -> finish());
         save.setOnClickListener(v -> saveToGallery());
+        setupGestures();
         load(getIntent().getStringExtra("image"));
     }
 
-    // 已有实例时再次收到图片(如连点不同图)：重投 intent 重新加载
+    // 已有实例时再次收到图片(连点不同图)：重投 intent 重新加载
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
@@ -54,8 +63,12 @@ public class ImageViewerActivity extends Activity {
             try {
                 String b64 = payload.substring(payload.indexOf(',') + 1);
                 byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
-                current = BitmapFactory.decodeByteArray(data, 0, data.length);
-                imageView.setImageBitmap(current);
+                Bitmap bm = BitmapFactory.decodeByteArray(data, 0, data.length);
+                if (bm == null) {
+                    Toast.makeText(this, "图片解析失败", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                show(bm);
             } catch (Exception e) {
                 Toast.makeText(this, "图片解析失败", Toast.LENGTH_SHORT).show();
             }
@@ -64,7 +77,7 @@ public class ImageViewerActivity extends Activity {
         }
     }
 
-    // 后台拉取图片(带上站点 cookie，兼容需登录的图片)
+    // 后台拉取图片(带站点 cookie，兼容需登录的图)
     private class LoadTask extends AsyncTask<String, Void, Bitmap> {
         @Override
         protected Bitmap doInBackground(String... urls) {
@@ -91,12 +104,78 @@ public class ImageViewerActivity extends Activity {
                 Toast.makeText(ImageViewerActivity.this, "图片加载失败(可能需先登录)", Toast.LENGTH_SHORT).show();
                 return;
             }
-            current = bm;
-            imageView.setImageBitmap(bm);
+            show(bm);
         }
     }
 
-    // 写入系统相册(Pictures/GPTCat)，无需存储权限(Android10+ 作用域存储)
+    // 双指缩放(0.5x~10x，以双指中心为轴) + 单指拖动
+    private void setupGestures() {
+        scaleDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override
+            public boolean onScale(ScaleGestureDetector d) {
+                float factor = d.getScaleFactor();
+                float[] v = new float[9];
+                matrix.getValues(v);
+                float cur = v[Matrix.MSCALE_X];
+                float next = Math.max(0.5f, Math.min(10f, cur * factor));
+                matrix.postScale(next / cur, next / cur, d.getFocusX(), d.getFocusY());
+                imageView.setImageMatrix(matrix);
+                return true;
+            }
+        });
+        imageView.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent ev) {
+                scaleDetector.onTouchEvent(ev);
+                switch (ev.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        lastX = ev.getX();
+                        lastY = ev.getY();
+                        dragging = true;
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if (!scaleDetector.isInProgress() && dragging) {
+                            matrix.postTranslate(ev.getX() - lastX, ev.getY() - lastY);
+                            imageView.setImageMatrix(matrix);
+                        }
+                        lastX = ev.getX();
+                        lastY = ev.getY();
+                        break;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        dragging = false;
+                        break;
+                    default:
+                        break;
+                }
+                return true;
+            }
+        });
+    }
+
+    // 首次显示按 fitCenter 初始化矩阵，之后的缩放/拖动基于此
+    private void show(Bitmap bm) {
+        current = bm;
+        imageView.setImageBitmap(bm);
+        imageView.post(new Runnable() {
+            @Override
+            public void run() { fitImage(); }
+        });
+    }
+
+    private void fitImage() {
+        if (current == null || imageView.getWidth() == 0) return;
+        float vw = imageView.getWidth(), vh = imageView.getHeight();
+        float bw = current.getWidth(), bh = current.getHeight();
+        float s = Math.min(vw / bw, vh / bh);
+        matrix.reset();
+        matrix.postScale(s, s);
+        matrix.postTranslate((vw - bw * s) / 2f, (vh - bh * s) / 2f);
+        imageView.setScaleType(ImageView.ScaleType.MATRIX);
+        imageView.setImageMatrix(matrix);
+    }
+
+    // 写入系统相册 Pictures/GPTCat
     private void saveToGallery() {
         if (current == null) {
             Toast.makeText(this, "没有可保存的图片", Toast.LENGTH_SHORT).show();
