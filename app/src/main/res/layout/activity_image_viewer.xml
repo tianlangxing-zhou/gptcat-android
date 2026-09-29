@@ -25,6 +25,12 @@
         android:layout_height="wrap_content"
         android:layout_gravity="top|start"
         android:layout_margin="12dp"
+        android:background="@android:color/transparent"
+        android:textColor="#FFFFFF"
+        android:shadowColor="#000000"
+        android:shadowDx="0"
+        android:shadowDy="0"
+        android:shadowRadius="6"
         android:text="@string/image_close" />
 
     <Button
@@ -34,6 +40,12 @@
         android:layout_gravity="bottom|center_horizontal"
         android:layout_margin="16dp"
         android:enabled="false"
+        android:background="@android:color/transparent"
+        android:textColor="#FFFFFF"
+        android:shadowColor="#000000"
+        android:shadowDx="0"
+        android:shadowDy="0"
+        android:shadowRadius="6"
         android:text="@string/image_save" />
 
 </FrameLayout>

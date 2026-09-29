@@ -9,7 +9,9 @@
     { key: 'GPT官方镜像', icon: '🪞' },
     { key: '香蕉 2 绘图', icon: '🍌' },
     { key: '深度研究', icon: '🔍' },
-    { key: '思维导图', icon: '🧠' }
+    { key: '思维导图', icon: '🧠' },
+    { key: '返回首页', icon: '🏠' },
+    { key: '升级套餐', icon: '⭐' }
   ];
   var MODEL = /GPT|Gemini|Claude|Deepseek|Grok|Auto/i;
   var SELECTOR = 'div,section,li,button,a,span,p,h3,h4';
@@ -18,6 +20,7 @@
   var CHUNK_BYTES = 48 * 1024;
   var fab = null, menu = null, rows = [], targets = [];
   var timer = null, lastScan = 0, suspended = false, imageBusy = false;
+  var menuTimer = null, suppressClick = false, fabX = null, fabY = null, dragBound = false;
 
   function own(node) {
     var el = node && (node.nodeType === 1 ? node : node.parentElement);
@@ -75,6 +78,75 @@
   function hide() {
     if (menu) menu.style.display = 'none';
     if (fab) fab.setAttribute('aria-expanded', 'false');
+    if (menuTimer !== null) { window.clearTimeout(menuTimer); menuTimer = null; }
+  }
+
+  // 菜单贴着 FAB 弹出：FAB 在右半屏菜单向左开，反之向右开；垂直优先在 FAB 上方
+  function placeMenu() {
+    var fr = fab.getBoundingClientRect();
+    var mw = 160, mh = 12 + ITEMS.length * 42;
+    var left = fr.right > window.innerWidth / 2 ? fr.right - mw : fr.left;
+    var top = fr.top - mh - 10;
+    if (top < 8) top = fr.bottom + 10;
+    menu.style.left = Math.max(4, Math.min(window.innerWidth - mw - 4, left)) + 'px';
+    menu.style.top = top + 'px';
+    menu.style.right = 'auto';
+    menu.style.bottom = 'auto';
+  }
+
+  // 恢复上次拖拽保存的 FAB 位置（localStorage 持久化）
+  function applyFabPos() {
+    try {
+      var raw = localStorage.getItem('gcFabPos');
+      if (raw) {
+        var p = JSON.parse(raw);
+        if (isFinite(p.x) && isFinite(p.y)) { fabX = p.x; fabY = p.y; }
+      }
+    } catch (e) { }
+    if (fabX == null) return;
+    fab.style.left = fabX + 'px';
+    fab.style.top = fabY + 'px';
+    fab.style.right = 'auto';
+    fab.style.bottom = 'auto';
+  }
+
+  // FAB 可随意拖拽：位移超 12px 视为拖拽(不触发点击)，松开记忆位置；拖拽时收起菜单
+  var dragState = null;
+  function bindFabDrag() {
+    if (typeof PointerEvent !== 'function') return;
+    fab.addEventListener('pointerdown', function (e) {
+      dragState = { sx: e.clientX, sy: e.clientY, ox: fab.offsetLeft, oy: fab.offsetTop, moved: false };
+    });
+    if (dragBound) return;
+    dragBound = true;
+    document.addEventListener('pointermove', function (e) {
+      if (!dragState) return;
+      var dx = e.clientX - dragState.sx, dy = e.clientY - dragState.sy;
+      if (!dragState.moved && Math.abs(dx) + Math.abs(dy) > 12) dragState.moved = true;
+      if (dragState.moved) {
+        fabX = Math.max(4, Math.min(window.innerWidth - 52, dragState.ox + dx));
+        fabY = Math.max(4, Math.min(window.innerHeight - 52, dragState.oy + dy));
+        fab.style.left = fabX + 'px';
+        fab.style.top = fabY + 'px';
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
+        hide();
+      }
+    }, true);
+    document.addEventListener('pointerup', function () {
+      if (!dragState) return;
+      if (dragState.moved) {
+        suppressClick = true;
+        try { localStorage.setItem('gcFabPos', JSON.stringify({ x: fabX, y: fabY })); } catch (e) { }
+      }
+      dragState = null;
+    }, true);
+  }
+
+  // 菜单展开后 4 秒无操作自动隐藏（点击菜单重置计时）
+  function startMenuTimer() {
+    if (menuTimer !== null) window.clearTimeout(menuTimer);
+    menuTimer = window.setTimeout(hide, 4000);
   }
 
   function build() {
@@ -91,18 +163,21 @@
     fab.style.cssText = 'position:fixed;right:16px;bottom:110px;width:48px;height:48px;'
       + 'border:0;border-radius:50%;background:rgba(31,111,235,.92);color:#fff;display:none;'
       + 'align-items:center;justify-content:center;font-size:22px;z-index:2147483000;'
-      + 'box-shadow:0 4px 12px rgba(0,0,0,.25);cursor:pointer;user-select:none;';
-    fab.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var opening = menu.style.display !== 'block';
-      menu.style.display = opening ? 'block' : 'none';
-      fab.setAttribute('aria-expanded', String(opening));
-    });
+      + 'box-shadow:0 4px 12px rgba(0,0,0,.25);cursor:pointer;user-select:none;touch-action:none;';
     menu = mark(document.createElement('div'));
     menu.id = 'gcMenu';
     menu.style.cssText = 'position:fixed;right:16px;bottom:168px;z-index:2147483000;display:none;'
       + 'background:#fff;border:1px solid #e5e7eb;border-radius:12px;'
       + 'box-shadow:0 6px 24px rgba(0,0,0,.15);padding:6px;min-width:150px;';
+    fab.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (suppressClick) { suppressClick = false; return; }
+      var opening = menu.style.display !== 'block';
+      if (opening) { placeMenu(); menu.style.display = 'block'; startMenuTimer(); }
+      else hide();
+      fab.setAttribute('aria-expanded', String(opening));
+    });
+    menu.addEventListener('pointerdown', startMenuTimer);
     ITEMS.forEach(function (item, index) {
       var row = mark(document.createElement('button'));
       row.type = 'button';
@@ -122,6 +197,8 @@
     });
     document.body.appendChild(fab);
     document.body.appendChild(menu);
+    bindFabDrag();
+    applyFabPos();
   }
 
   function applyLightTheme() {
