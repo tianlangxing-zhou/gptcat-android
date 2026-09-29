@@ -74,6 +74,7 @@
 
   function build() {
     fab = document.createElement('div');
+    fab.id = 'gcFab';
     fab.textContent = '⚡';
     fab.style.cssText = 'position:fixed;right:16px;bottom:110px;width:48px;height:48px;'
       + 'border-radius:50%;background:rgba(31,111,235,.92);color:#fff;display:flex;'
@@ -83,6 +84,7 @@
     document.body.appendChild(fab);
 
     menu = document.createElement('div');
+    menu.id = 'gcMenu';
     menu.style.cssText = 'position:fixed;right:16px;bottom:168px;z-index:2147483000;display:none;'
       + 'background:#fff;border:1px solid #e5e7eb;border-radius:12px;'
       + 'box-shadow:0 6px 24px rgba(0,0,0,.15);padding:6px;min-width:150px;';
@@ -117,24 +119,26 @@
     open = false;
   }
 
-  // 上报页面背景色给原生，让状态栏区域颜色跟随页面主题
-  function reportBg() {
-    try {
-      var bridge = window.GptCatBridge;
-      if (!bridge) return;
-      var col = getComputedStyle(document.body).backgroundColor;
-      if (!col || col === 'rgba(0, 0, 0, 0)' || col === 'transparent') {
-        col = getComputedStyle(document.documentElement).backgroundColor;
-      }
-      if (col && col !== 'rgba(0, 0, 0, 0)' && col !== 'transparent') {
-        bridge.reportBg(col);
-      }
-    } catch (e) { }
+  // 强制白底黑字（用户要求：APP 内页面白底黑字）
+  function applyLightTheme() {
+    if (document.getElementById('gc-light')) return;
+    var s = document.createElement('style');
+    s.id = 'gc-light';
+    s.textContent = ''
+      + 'html,body,#app,[class*="n-config-provider"],[class*="n-"]:not(#gcFab):not(#gcMenu),'
+      + 'div:not(#gcFab):not(#gcMenu),section:not(#gcFab):not(#gcMenu),'
+      + 'li:not(#gcFab):not(#gcMenu),header:not(#gcFab):not(#gcMenu),'
+      + 'main:not(#gcFab):not(#gcMenu),article:not(#gcFab):not(#gcMenu)'
+      + '{background-color:#ffffff !important;color:#1f1f1f !important}'
+      + 'input,textarea,[contenteditable="true"]{background:#ffffff !important;color:#111111 !important;'
+      + 'border:1px solid #d0d0d0 !important}'
+      + 'a,span,p,h1,h2,h3,h4,h5,h6{color:#1f1f1f !important}';
+    (document.head || document.documentElement).appendChild(s);
   }
 
   // SPA 路由/重渲染后自动增删，保证只在功能页出现
   function ensure() {
-    reportBg();
+    applyLightTheme();
     if (!available()) { destroy(); return; }
     if (!document.body.contains(fab)) build();
   }

@@ -38,31 +38,43 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private ValueCallback<Uri[]> uploadCallback;
     private String injectJs;
-    private volatile int lastBg = Integer.MIN_VALUE;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // 状态栏区域颜色与图标深浅跟随系统夜间模式（页面内容由布局 fitsSystemWindows 避开状态栏）
-        boolean nightMode = (getResources().getConfiguration().uiMode
-                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
-                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
-        getWindow().setBackgroundDrawable(new ColorDrawable(nightMode ? 0xFF141414 : Color.WHITE));
+        // 白底 APP：页面统一白底黑字，状态栏也白底 + 深色图标
+        getWindow().setBackgroundDrawable(new ColorDrawable(Color.WHITE));
         setContentView(R.layout.activity_main);
 
         progressBar = findViewById(R.id.progressBar);
         webView = findViewById(R.id.webView);
         injectJs = loadRawInject();
-        // 网页主题桥：页面把背景色报上来，状态栏区域随之变色（API35 透明状态栏下窗口背景即状态栏底色）
-        webView.addJavascriptInterface(new BgBridge(), "GptCatBridge");
 
+        // 状态栏图标用深色（白底上才看得清）
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController c = getWindow().getInsetsController();
             if (c != null) {
-                // 深色页面配浅色(白)状态栏图标；浅色页面配深色图标
-                int appearance = nightMode ? 0 : WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
-                c.setSystemBarsAppearance(appearance, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+                c.setSystemBarsAppearance(WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+                        WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
             }
+        }
+
+        // edge-to-edge(targetSdk35) 下 adjustResize 失效：手动监听状态栏/导航栏/软键盘 insets，
+        // 给根容器设置上下内边距，内容避开状态栏；软键盘弹出时 WebView 收缩、输入区上移到键盘之上
+        final View root = findViewById(R.id.root);
+        if (Build.VERSION.SDK_INT >= 20 && root != null) {
+            root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+                @Override
+                public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                    int top = insets.getInsets(WindowInsets.Type.systemBars()).top;
+                    int nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+                    int ime = insets.getInsets(WindowInsets.Type.ime()).bottom;
+                    int bottom = ime > 0 ? ime : nav;
+                    root.setPadding(0, top, 0, bottom);
+                    return insets;
+                }
+            });
+            root.requestApplyInsets();
         }
 
         WebSettings s = webView.getSettings();
@@ -93,6 +105,13 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return handleUrl(view, request.getUrl().toString());
+            }
+
+            // WebView 渲染进程崩溃(独立进程)时自动重载，避免整页闪退/退出
+            @Override
+            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+                if (view == webView) webView.reload();
+                return true;
             }
 
             private boolean handleUrl(WebView view, String url) {
@@ -179,51 +198,6 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl(HOME_URL);
         }
-    }
-
-    // JS 桥：网页上报背景色 → 状态栏区域颜色与图标深浅跟随页面主题
-    private class BgBridge {
-        @JavascriptInterface
-        public void reportBg(final String color) {
-            final int c = parseColor(color);
-            if (c == lastBg) return;
-            lastBg = c;
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    getWindow().setBackgroundDrawable(new ColorDrawable(c));
-                    if (Build.VERSION.SDK_INT >= 30) {
-                        WindowInsetsController ctr = getWindow().getInsetsController();
-                        if (ctr != null) {
-                            int lum = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
-                            int appearance = lum > 140
-                                    ? WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0;
-                            ctr.setSystemBarsAppearance(appearance,
-                                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    // 支持 "#rrggbb" / "rgb(r,g,b)" / "rgba(r,g,b,a)"
-    private static int parseColor(String s) {
-        try {
-            s = s.trim();
-            if (s.startsWith("#")) return Color.parseColor(s);
-            if (s.startsWith("rgb")) {
-                String nums = s.substring(s.indexOf('(') + 1, s.indexOf(')'));
-                String[] p = nums.split(",");
-                int r = Integer.parseInt(p[0].trim());
-                int g = Integer.parseInt(p[1].trim());
-                int b = Integer.parseInt(p[2].trim());
-                int a = 255;
-                if (p.length > 3) a = (int) (Float.parseFloat(p[3].trim()) * 255);
-                return Color.argb(a, r, g, b);
-            }
-        } catch (Exception ignored) { }
-        return Color.WHITE;
     }
 
     private String loadRawInject() {
