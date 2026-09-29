@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">GPTCat</string>
+    <string name="image_description">对话图片</string>
+    <string name="image_close">关闭</string>
+    <string name="image_save">保存到相册</string>
+    <string name="image_saving">正在保存…</string>
 </resources>

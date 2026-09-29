@@ -1,12 +1,8 @@
-// GPTCat 移动端适配注入脚本
-// 在页面内注入“快捷入口”悬浮按钮(FAB)，按文本匹配定位站内功能卡片并触发其点击。
-// 找不到目标(如登录页)时自动隐藏，SPA 路由切换后自动恢复。
-(function () {
-  if (window.__gcInjected) return;
+// GPTCat 移动端适配：变化驱动的快捷入口 + 分块传输图片。
+(function (bridgeToken) {
+  'use strict';
+  if (window !== window.top || window.__gcInjected) return;
   window.__gcInjected = true;
-
-  // 顶部模型选择按钮的匹配关键词（模型名动态变化：GPT-4O-mini / ChatGPT 5.6 Sol 等）
-  var MODEL_KEYWORDS = ['GPT', 'Gemini', 'Claude', 'Deepseek', 'Grok', 'Auto'];
 
   var ITEMS = [
     { key: '__model__', icon: '🤖', label: '切换模型' },
@@ -15,201 +11,268 @@
     { key: '深度研究', icon: '🔍' },
     { key: '思维导图', icon: '🧠' }
   ];
+  var MODEL = /GPT|Gemini|Claude|Deepseek|Grok|Auto/i;
+  var SELECTOR = 'div,section,li,button,a,span,p,h3,h4';
+  var EXCLUDED_MODEL = '[class*="drawer"],[class*="sider"],[class*="dropdown"],[class*="popover"],[class*="menu"]';
+  var MAX_IMAGE_BYTES = 32 * 1024 * 1024;
+  var CHUNK_BYTES = 48 * 1024;
+  var fab = null, menu = null, rows = [], targets = [];
+  var timer = null, lastScan = 0, suspended = false, imageBusy = false;
 
-  // 找包含目标文本的“最内层”元素（点击后事件冒泡到卡片容器，触发框架的 onClick）
-  function findByText(txt) {
-    var nodes = document.querySelectorAll('div,section,li,button,a,span,p,h3,h4');
-    var best = null;
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i];
-      var t = (n.textContent || '').trim();
-      if (t.indexOf(txt) !== -1 && t.length <= txt.length + 60) {
-        if (!best || (best !== n && best.contains(n))) best = n;
-      }
-    }
-    return best;
+  function own(node) {
+    var el = node && (node.nodeType === 1 ? node : node.parentElement);
+    return !!(el && el.closest && el.closest('[data-gc-ui]'));
   }
 
-  function clickEl(el) {
-    if (!el) return false;
-    var types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
-    for (var i = 0; i < types.length; i++) {
-      var type = types[i];
-      var Ctor = (typeof PointerEvent === 'function' && type.indexOf('pointer') === 0)
+  function mark(node) { node.setAttribute('data-gc-ui', ''); return node; }
+
+  function visible(node) {
+    if (node.closest('[hidden],[aria-hidden="true"]')) return false;
+    var rect = node.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    var style = window.getComputedStyle(node);
+    return style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+  }
+
+  // 一次查询同时寻找所有入口，排除自己的按钮和菜单，避免自匹配/递归点击。
+  function scanTargets() {
+    var result = new Array(ITEMS.length);
+    var nodes = document.querySelectorAll(SELECTOR);
+    var modelTop = Infinity;
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (own(node)) continue;
+      var text = (node.textContent || '').trim();
+      if (!text || text.length > 100) continue;
+      var checkedVisible = false;
+      for (var j = 1; j < ITEMS.length; j++) {
+        var key = ITEMS[j].key;
+        if (text.length > key.length + 60 || text.indexOf(key) === -1) continue;
+        if (!checkedVisible && !visible(node)) break;
+        checkedVisible = true;
+        if (!result[j] || result[j].contains(node)) result[j] = node;
+      }
+      if (text.length > 40 || !MODEL.test(text) || node.closest(EXCLUDED_MODEL)) continue;
+      if (!checkedVisible && !visible(node)) continue;
+      var rect = node.getBoundingClientRect();
+      if (rect.left < 0 || rect.right > window.innerWidth || rect.top < 0 || rect.top > 260) continue;
+      if (!result[0] || result[0].contains(node) || rect.top < modelTop) {
+        result[0] = node;
+        modelTop = rect.top;
+      }
+    }
+    return result;
+  }
+
+  function clickElement(el) {
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (type) {
+      var EventType = typeof PointerEvent === 'function' && type.indexOf('pointer') === 0
         ? PointerEvent : MouseEvent;
-      try {
-        el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, view: window }));
-      } catch (e) { /* ignore */ }
-    }
-    return true;
+      el.dispatchEvent(new EventType(type, { bubbles: true, cancelable: true, view: window }));
+    });
   }
 
-  // 打开顶部模型选择下拉：只匹配视口内顶部 header 的元素，
-  // 排除隐藏抽屉/侧栏/弹层（naive-ui 抽屉 DOM 常驻但被移出视口）
-  function openModelMenu() {
-    var nodes = document.querySelectorAll('div,span,button,p');
-    var cand = null, candTop = 1e9;
-    var W = window.innerWidth;
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i];
-      var t = (n.textContent || '').trim();
-      if (!t || t.length > 40) continue;
-      var hit = false;
-      for (var j = 0; j < MODEL_KEYWORDS.length; j++) {
-        if (t.indexOf(MODEL_KEYWORDS[j]) !== -1) { hit = true; break; }
-      }
-      if (!hit) continue;
-      if (n.closest && n.closest('[class*="drawer"],[class*="sider"],[class*="dropdown"],[class*="popover"],[class*="menu"]')) continue;
-      var r = n.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) continue;
-      if (r.left < 0 || r.right > W) continue;
-      if (r.top < 0 || r.top > 260) continue;
-      if (cand && cand.contains(n)) { cand = n; continue; }
-      if (r.top < candTop) { cand = n; candTop = r.top; }
-    }
-    if (cand) clickEl(cand);
+  function hide() {
+    if (menu) menu.style.display = 'none';
+    if (fab) fab.setAttribute('aria-expanded', 'false');
   }
-
-  var fab = null, menu = null, open = false;
 
   function build() {
-    fab = document.createElement('div');
+    if (fab) fab.remove();
+    if (menu) menu.remove();
+    rows = [];
+    fab = mark(document.createElement('button'));
     fab.id = 'gcFab';
+    fab.type = 'button';
     fab.textContent = '⚡';
+    fab.setAttribute('aria-label', '快捷入口');
+    fab.setAttribute('aria-expanded', 'false');
+    fab.setAttribute('aria-controls', 'gcMenu');
     fab.style.cssText = 'position:fixed;right:16px;bottom:110px;width:48px;height:48px;'
-      + 'border-radius:50%;background:rgba(31,111,235,.92);color:#fff;display:flex;'
+      + 'border:0;border-radius:50%;background:rgba(31,111,235,.92);color:#fff;display:none;'
       + 'align-items:center;justify-content:center;font-size:22px;z-index:2147483000;'
       + 'box-shadow:0 4px 12px rgba(0,0,0,.25);cursor:pointer;user-select:none;';
-    fab.addEventListener('click', function (e) { e.stopPropagation(); toggle(); });
-    document.body.appendChild(fab);
-
-    menu = document.createElement('div');
+    fab.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var opening = menu.style.display !== 'block';
+      menu.style.display = opening ? 'block' : 'none';
+      fab.setAttribute('aria-expanded', String(opening));
+    });
+    menu = mark(document.createElement('div'));
     menu.id = 'gcMenu';
     menu.style.cssText = 'position:fixed;right:16px;bottom:168px;z-index:2147483000;display:none;'
       + 'background:#fff;border:1px solid #e5e7eb;border-radius:12px;'
       + 'box-shadow:0 6px 24px rgba(0,0,0,.15);padding:6px;min-width:150px;';
-    ITEMS.forEach(function (it) {
-      var row = document.createElement('div');
-      row.textContent = it.icon + '  ' + (it.label || it.key);
-      row.style.cssText = 'padding:10px 14px;border-radius:8px;font-size:14px;color:#1f2937;cursor:pointer;';
-      row.addEventListener('click', function () {
-        if (it.key === '__model__') { openModelMenu(); hide(); return; }
-        var el = findByText(it.key);
-        if (el) { clickEl(el); hide(); }
+    ITEMS.forEach(function (item, index) {
+      var row = mark(document.createElement('button'));
+      row.type = 'button';
+      row.textContent = item.icon + '  ' + (item.label || item.key);
+      row.style.cssText = 'display:block;width:100%;border:0;background:#fff;text-align:left;'
+        + 'padding:10px 14px;border-radius:8px;font-size:14px;color:#1f2937;cursor:pointer;';
+      row.addEventListener('click', function (event) {
+        event.stopPropagation();
+        // 点击时刷新目标，以应对框架替换节点和只改 CSS 的路由切换。
+        targets = scanTargets();
+        hide();
+        if (targets[index]) clickElement(targets[index]);
+        schedule();
       });
+      rows.push(row);
       menu.appendChild(row);
     });
+    document.body.appendChild(fab);
     document.body.appendChild(menu);
   }
 
-  function toggle() {
-    if (!menu) return;
-    open = !open;
-    menu.style.display = open ? 'block' : 'none';
-  }
-  function hide() { open = false; if (menu) menu.style.display = 'none'; }
-
-  function available() {
-    return ITEMS.some(function (it) { return !!findByText(it.key); });
-  }
-
-  function destroy() {
-    if (fab) { fab.remove(); fab = null; }
-    if (menu) { menu.remove(); menu = null; }
-    open = false;
-  }
-
-  // 点击对话里生成的图片 → 原生全屏查看 + 保存到相册
-  // 站点常在图片上盖透明覆盖层/工具条，click 的 target 未必是 <img>：
-  // 依次回退 closest('img') → 按点击坐标反查被覆盖的大图 → 容器背景图
-  function hookImages() {
-    if (window.__gcImgHook) return;
-    window.__gcImgHook = true;
-    document.addEventListener('click', function (e) {
-      var t = e.target;
-      if (!t || !t.closest) return;
-      if (t.closest('#gcFab,#gcMenu,[class*="avatar"]')) return;
-      var img = null, src = null, minW = 160;
-      var direct = t.closest('img');
-      if (direct) {
-        var r0 = direct.getBoundingClientRect();
-        if ((direct.naturalWidth || 0) < 200 && r0.width < minW) return;
-        img = direct;
-        src = img.currentSrc || img.src;
-      }
-      if (!src) {
-        // 覆盖层挡住图片：按点击坐标找视口内被覆盖的大图
-        var x = e.clientX, y = e.clientY;
-        var all = document.querySelectorAll('img');
-        for (var k = 0; k < all.length; k++) {
-          var r = all[k].getBoundingClientRect();
-          if (r.width < minW) continue;
-          if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
-            img = all[k];
-            src = img.currentSrc || img.src;
-            break;
-          }
-        }
-      }
-      if (!src) {
-        // 图片不是 <img> 而是容器背景图
-        var el = t;
-        for (var i = 0; i < 4 && el; i++) {
-          var bi = getComputedStyle(el).backgroundImage;
-          if (bi && bi.indexOf('url(') === 0) {
-            src = bi.slice(bi.indexOf('(') + 1).replace(/["']/g, '').replace(/\)$/, '');
-            break;
-          }
-          el = el.parentElement;
-        }
-      }
-      if (!src) return;
-      e.preventDefault();
-      e.stopPropagation();
-      var isData = src.indexOf('data:image') === 0;
-      var isBlob = src.indexOf('blob:') === 0;
-      if ((isData || isBlob) && img) {
-        try {
-          var cv = document.createElement('canvas');
-          cv.width = img.naturalWidth || img.width || 512;
-          cv.height = img.naturalHeight || img.height || 512;
-          cv.getContext('2d').drawImage(img, 0, 0);
-          window.GptCatBridge.openImage(cv.toDataURL('image/png'));
-          return;
-        } catch (err) { /* canvas 被跨域污染 → 走 URL */ }
-      }
-      if (isData || src.indexOf('http') === 0) {
-        window.GptCatBridge.openImage(src);
-      }
-    }, true);
-  }
-
-  // 强制白底黑字（用户要求：APP 内页面白底黑字）
   function applyLightTheme() {
     if (document.getElementById('gc-light')) return;
-    var s = document.createElement('style');
-    s.id = 'gc-light';
-    s.textContent = ''
-      + 'html,body,#app,[class*="n-config-provider"],[class*="n-"]:not(#gcFab):not(#gcMenu),'
-      + 'div:not(#gcFab):not(#gcMenu),section:not(#gcFab):not(#gcMenu),'
-      + 'li:not(#gcFab):not(#gcMenu),header:not(#gcFab):not(#gcMenu),'
-      + 'main:not(#gcFab):not(#gcMenu),article:not(#gcFab):not(#gcMenu)'
-      + '{background-color:#ffffff !important;color:#1f1f1f !important}'
-      + 'input,textarea,[contenteditable="true"]{background:#ffffff !important;color:#111111 !important;'
+    var style = mark(document.createElement('style'));
+    style.id = 'gc-light';
+    style.textContent = 'html,body,#app,[class*="n-config-provider"],'
+      + '[class*="n-"]:not([data-gc-ui]),div:not([data-gc-ui]),section:not([data-gc-ui]),'
+      + 'li:not([data-gc-ui]),header:not([data-gc-ui]),main:not([data-gc-ui]),article:not([data-gc-ui])'
+      + '{background-color:#fff !important;color:#1f1f1f !important}'
+      + 'input,textarea,[contenteditable="true"]{background:#fff !important;color:#111 !important;'
       + 'border:1px solid #d0d0d0 !important}'
-      + 'button,[role="button"]{background-color:#ffffff !important;color:#1f1f1f !important}'
+      + 'button:not([data-gc-ui]),[role="button"]:not([data-gc-ui])'
+      + '{background-color:#fff !important;color:#1f1f1f !important}'
       + 'a,span,p,h1,h2,h3,h4,h5,h6{color:#1f1f1f !important}';
-    (document.head || document.documentElement).appendChild(s);
+    (document.head || document.documentElement).appendChild(style);
   }
 
-  // SPA 路由/重渲染后自动增删，保证只在功能页出现
-  function ensure() {
+  function refresh() {
+    timer = null;
+    if (suspended || document.hidden || !document.body) return;
+    lastScan = Date.now();
     applyLightTheme();
-    hookImages();
-    if (!available()) { destroy(); return; }
-    if (!document.body.contains(fab)) build();
+    targets = scanTargets();
+    var available = targets.some(Boolean);
+    if (!available && (!fab || !document.body.contains(fab))) return;
+    if (!fab || !menu || !document.body.contains(fab) || !document.body.contains(menu)) build();
+    fab.style.display = available ? 'flex' : 'none';
+    rows.forEach(function (row, index) { row.style.display = targets[index] ? 'block' : 'none'; });
+    if (!available) hide();
   }
 
-  setInterval(ensure, 1500);
-  ensure();
-})();
+  function schedule() {
+    if (timer !== null || suspended || document.hidden) return;
+    timer = window.setTimeout(refresh, Math.max(0, 1000 - (Date.now() - lastScan)));
+  }
+
+  function ownMutation(record) {
+    if (own(record.target)) return true;
+    if (record.type !== 'childList') return false;
+    var changed = Array.prototype.slice.call(record.addedNodes)
+      .concat(Array.prototype.slice.call(record.removedNodes));
+    return changed.length > 0 && changed.every(own);
+  }
+
+  var observer = new MutationObserver(function (records) {
+    if (records.some(function (record) { return !ownMutation(record); })) schedule();
+  });
+
+  function observe() {
+    observer.observe(document.documentElement, {
+      subtree: true, childList: true, characterData: true, attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden']
+    });
+  }
+
+  function readChunk(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result).split(',')[1]); };
+      reader.onerror = function () { reject(new Error('图片读取失败')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function sendBlob(blob, bridge) {
+    if (!blob.size || blob.size > MAX_IMAGE_BYTES) return Promise.reject(new Error('图片超过 32 MiB 或为空'));
+    var id = bridge.beginImage(bridgeToken, blob.size);
+    if (!id) return Promise.reject(new Error('无法创建图片缓存'));
+    var offset = 0;
+    function next() {
+      if (suspended) return Promise.reject(new Error('页面已离开'));
+      if (offset >= blob.size) {
+        if (!bridge.finishImage(bridgeToken, id)) throw new Error('图片打开失败');
+        return;
+      }
+      return readChunk(blob.slice(offset, offset + CHUNK_BYTES)).then(function (encoded) {
+        if (!bridge.appendImage(bridgeToken, id, encoded)) throw new Error('图片传输失败');
+        offset += CHUNK_BYTES;
+        return next();
+      });
+    }
+    return Promise.resolve().then(next).catch(function (error) {
+      bridge.cancelImage(bridgeToken, id);
+      throw error;
+    });
+  }
+
+  document.addEventListener('click', function (event) {
+    var image = event.target;
+    var bridge = window.GptCatBridge;
+    if (!bridge || typeof bridge.openImage !== 'function' || !image) return;
+    if (image.tagName !== 'IMG') {
+      // 站点常在图片上盖透明覆盖层/工具条：target 不是 <img> 时，按点击坐标反查被覆盖的大图
+      image = null;
+      if (event.target.closest && event.target.closest('[data-gc-ui]')) return;
+      var x = event.clientX, y = event.clientY;
+      var all = document.querySelectorAll('img');
+      for (var i = 0; i < all.length; i++) {
+        var hit = all[i].getBoundingClientRect();
+        if (hit.width < 160) continue;
+        if (x >= hit.left && x <= hit.right && y >= hit.top && y <= hit.bottom) {
+          image = all[i];
+          break;
+        }
+      }
+      if (!image) return;
+    }
+    if (image.closest('[data-gc-ui],[class*="avatar"],[class*="toolbar"],[class*="header"],[class*="sider"]')) return;
+    if (image.naturalWidth < 200 && image.getBoundingClientRect().width < 160) return;
+    var source = image.currentSrc || image.src;
+    if (!source || imageBusy) return;
+    if (/^https?:\/\//i.test(source)) {
+      if (!bridge.openImage(bridgeToken, source)) return;
+    } else if (/^(blob:|data:image\/)/i.test(source) && typeof bridge.beginImage === 'function') {
+      imageBusy = true;
+      // Blob/FileReader 不绘制 canvas，保留原始格式，避免生成超大的 PNG 字符串。
+      fetch(source).then(function (response) {
+        if (!response.ok) throw new Error('无法读取图片');
+        return response.blob();
+      }).then(function (blob) { return sendBlob(blob, bridge); }).catch(function (error) {
+        if (!suspended) window.alert('图片打开失败：' + error.message);
+      }).then(function () { imageBusy = false; });
+    } else return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+
+  document.addEventListener('click', function (event) { if (!own(event.target)) hide(); });
+  document.addEventListener('keydown', function (event) { if (event.key === 'Escape') hide(); });
+  window.addEventListener('resize', schedule);
+  window.addEventListener('popstate', schedule);
+  window.addEventListener('hashchange', schedule);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      hide();
+    } else schedule();
+  });
+  window.addEventListener('pagehide', function () {
+    suspended = true;
+    observer.disconnect();
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+  });
+  window.addEventListener('pageshow', function () {
+    suspended = false;
+    observe();
+    schedule();
+  });
+  observe();
+  refresh();
+})('__GC_BRIDGE_TOKEN__');

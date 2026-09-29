@@ -7,3 +7,9 @@
 # 签名密钥（含私钥，禁止上传 GitHub）
 *.keystore
 *.jks
+
+# 本地回归检查产物
+/.checks/
+
+# tests/build_smoke.py smoke fixture
+/tests/gptcat build test */
