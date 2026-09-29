@@ -22,6 +22,9 @@ import android.widget.ProgressBar;
 import android.view.KeyEvent;
 import android.view.View;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+
 public class MainActivity extends Activity {
 
     private static final String HOME_URL = "https://share.gptcat.cc/";
@@ -30,6 +33,7 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ProgressBar progressBar;
     private ValueCallback<Uri[]> uploadCallback;
+    private String injectJs;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -40,6 +44,7 @@ public class MainActivity extends Activity {
 
         progressBar = findViewById(R.id.progressBar);
         webView = findViewById(R.id.webView);
+        injectJs = loadRawInject();
 
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
@@ -100,9 +105,13 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 progressBar.setVisibility(View.GONE);
+                // 注入移动端快捷入口（脚本内部自带去重与“找不到目标自动隐藏”逻辑）
+                if (injectJs != null && !injectJs.isEmpty()) {
+                    view.evaluateJavascript(injectJs, null);
+                }
             }
 
-            // 网络层错误（DNS/连接/超时等）：WebView 会显示默认错误页，这里换成可读提示
+            // 网络层错误（DNS/连接/超时等）：换成可读提示页
             @Override
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
                 showError("网络错误 (" + errorCode + ")：" + description);
@@ -150,6 +159,24 @@ public class MainActivity extends Activity {
             webView.restoreState(savedInstanceState);
         } else {
             webView.loadUrl(HOME_URL);
+        }
+    }
+
+    private String loadRawInject() {
+        InputStream is = null;
+        try {
+            is = getResources().openRawResource(R.raw.inject);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            return bos.toString("UTF-8");
+        } catch (Exception e) {
+            return "";
+        } finally {
+            if (is != null) {
+                try { is.close(); } catch (Exception ignored) { }
+            }
         }
     }
 
