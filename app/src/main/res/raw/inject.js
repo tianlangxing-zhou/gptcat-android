@@ -5,7 +5,6 @@
   window.__gcInjected = true;
 
   var ITEMS = [
-    { key: '__model__', icon: '🤖', label: '切换模型' },
     { key: 'GPT官方镜像', icon: '🪞' },
     { key: '香蕉 2 绘图', icon: '🍌' },
     { key: '深度研究', icon: '🔍' },
@@ -13,14 +12,13 @@
     { key: '返回首页', icon: '🏠' },
     { key: '升级套餐', icon: '⭐' }
   ];
-  var MODEL = /GPT|Gemini|Claude|Deepseek|Grok|Auto/i;
   var SELECTOR = 'div,section,li,button,a,span,p,h3,h4';
-  var EXCLUDED_MODEL = '[class*="drawer"],[class*="sider"],[class*="dropdown"],[class*="popover"],[class*="menu"]';
   var MAX_IMAGE_BYTES = 32 * 1024 * 1024;
   var CHUNK_BYTES = 48 * 1024;
   var fab = null, menu = null, rows = [], targets = [];
   var timer = null, lastScan = 0, suspended = false, imageBusy = false;
   var menuTimer = null, suppressClick = false, fabX = null, fabY = null, dragBound = false;
+  var dockTimer = null, docked = false;
 
   function own(node) {
     var el = node && (node.nodeType === 1 ? node : node.parentElement);
@@ -41,27 +39,18 @@
   function scanTargets() {
     var result = new Array(ITEMS.length);
     var nodes = document.querySelectorAll(SELECTOR);
-    var modelTop = Infinity;
     for (var i = 0; i < nodes.length; i++) {
       var node = nodes[i];
       if (own(node)) continue;
       var text = (node.textContent || '').trim();
       if (!text || text.length > 100) continue;
       var checkedVisible = false;
-      for (var j = 1; j < ITEMS.length; j++) {
+      for (var j = 0; j < ITEMS.length; j++) {
         var key = ITEMS[j].key;
         if (text.length > key.length + 60 || text.indexOf(key) === -1) continue;
         if (!checkedVisible && !visible(node)) break;
         checkedVisible = true;
         if (!result[j] || result[j].contains(node)) result[j] = node;
-      }
-      if (text.length > 40 || !MODEL.test(text) || node.closest(EXCLUDED_MODEL)) continue;
-      if (!checkedVisible && !visible(node)) continue;
-      var rect = node.getBoundingClientRect();
-      if (rect.left < 0 || rect.right > window.innerWidth || rect.top < 0 || rect.top > 260) continue;
-      if (!result[0] || result[0].contains(node) || rect.top < modelTop) {
-        result[0] = node;
-        modelTop = rect.top;
       }
     }
     return result;
@@ -79,6 +68,7 @@
     if (menu) menu.style.display = 'none';
     if (fab) fab.setAttribute('aria-expanded', 'false');
     if (menuTimer !== null) { window.clearTimeout(menuTimer); menuTimer = null; }
+    scheduleDock();
   }
 
   // 菜单贴着 FAB 弹出：FAB 在右半屏菜单向左开，反之向右开；垂直优先在 FAB 上方
@@ -115,6 +105,7 @@
   function bindFabDrag() {
     if (typeof PointerEvent !== 'function') return;
     fab.addEventListener('pointerdown', function (e) {
+      cancelDock();
       dragState = { sx: e.clientX, sy: e.clientY, ox: fab.offsetLeft, oy: fab.offsetTop, moved: false };
     });
     if (dragBound) return;
@@ -140,6 +131,7 @@
         try { localStorage.setItem('gcFabPos', JSON.stringify({ x: fabX, y: fabY })); } catch (e) { }
       }
       dragState = null;
+      scheduleDock();
     }, true);
   }
 
@@ -147,6 +139,35 @@
   function startMenuTimer() {
     if (menuTimer !== null) window.clearTimeout(menuTimer);
     menuTimer = window.setTimeout(hide, 4000);
+  }
+
+  // FAB 闲时 3 秒收缩到最近一侧边缘(露出一截)，点一下弹回/拖回
+  function dockSide() {
+    if (!fab || fab.style.display === 'none') return;
+    if (menu && menu.style.display === 'block') return;
+    var cx = fabX != null ? fabX : fab.offsetLeft;
+    docked = true;
+    fab.style.transition = 'transform .25s ease';
+    fab.style.transform = 'translateX(' + (cx < window.innerWidth / 2 ? -30 : 30) + 'px)';
+  }
+
+  function undock() {
+    if (!docked) return;
+    docked = false;
+    fab.style.transform = '';
+  }
+
+  function scheduleDock() {
+    if (dockTimer !== null) window.clearTimeout(dockTimer);
+    dockTimer = window.setTimeout(function () {
+      dockTimer = null;
+      if (!suspended && !document.hidden && fab && menu && menu.style.display !== 'block') dockSide();
+    }, 3000);
+  }
+
+  function cancelDock() {
+    if (dockTimer !== null) { window.clearTimeout(dockTimer); dockTimer = null; }
+    undock();
   }
 
   function build() {
@@ -172,6 +193,7 @@
     fab.addEventListener('click', function (e) {
       e.stopPropagation();
       if (suppressClick) { suppressClick = false; return; }
+      cancelDock();
       var opening = menu.style.display !== 'block';
       if (opening) { placeMenu(); menu.style.display = 'block'; startMenuTimer(); }
       else hide();
@@ -307,12 +329,16 @@
       }
       if (!image) return;
     }
-    if (image.closest('[data-gc-ui],[class*="avatar"],[class*="toolbar"],[class*="header"],[class*="sider"]')) return;
-    if (image.naturalWidth < 200 && image.getBoundingClientRect().width < 160) return;
+    if (image.closest('[data-gc-ui],[class*="avatar"]')) { console.log('GCIMG skip: excluded'); return; }
+    if (image.naturalWidth < 200 && image.getBoundingClientRect().width < 160) {
+      console.log('GCIMG skip: small', image.naturalWidth, image.getBoundingClientRect().width);
+      return;
+    }
     var source = image.currentSrc || image.src;
-    if (!source || imageBusy) return;
+    if (!source || imageBusy) { console.log('GCIMG skip: no-src/busy'); return; }
+    console.log('GCIMG hit', String(source).slice(0, 90), image.naturalWidth + 'x' + image.naturalHeight);
     if (/^https?:\/\//i.test(source)) {
-      if (!bridge.openImage(bridgeToken, source)) return;
+      if (!bridge.openImage(bridgeToken, source)) { console.log('GCIMG bridge rejected'); return; }
     } else if (/^(blob:|data:image\/)/i.test(source) && typeof bridge.beginImage === 'function') {
       imageBusy = true;
       // Blob/FileReader 不绘制 canvas，保留原始格式，避免生成超大的 PNG 字符串。
@@ -322,7 +348,7 @@
       }).then(function (blob) { return sendBlob(blob, bridge); }).catch(function (error) {
         if (!suspended) window.alert('图片打开失败：' + error.message);
       }).then(function () { imageBusy = false; });
-    } else return;
+    } else { console.log('GCIMG skip: scheme', String(source).slice(0, 30)); return; }
     event.preventDefault();
     event.stopPropagation();
   }, true);

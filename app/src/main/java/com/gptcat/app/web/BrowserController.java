@@ -21,6 +21,7 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 
+import com.gptcat.app.ImageViewerActivity;
 import com.gptcat.app.R;
 
 import java.io.ByteArrayOutputStream;
@@ -90,6 +91,25 @@ public final class BrowserController {
             }
         });
         if (paused) view.onPause();
+
+        // 长按图片兜底：绕过 JS 事件流，命中图片/图片链接直接进入全屏查看页
+        view.setOnLongClickListener(v -> {
+            WebView.HitTestResult hit = view.getHitTestResult();
+            if (hit == null) return false;
+            int type = hit.getType();
+            if (type == WebView.HitTestResult.IMAGE_TYPE
+                    || type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                String extra = hit.getExtra();
+                if (extra != null && UrlPolicy.isHttpUrl(extra)) {
+                    Intent viewer = new Intent(activity, ImageViewerActivity.class);
+                    viewer.putExtra(ImageViewerActivity.EXTRA_URL, extra);
+                    viewer.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    activity.startActivity(viewer);
+                }
+                return true;
+            }
+            return false;
+        });
     }
 
     public void restoreOrLoad(Bundle state) {

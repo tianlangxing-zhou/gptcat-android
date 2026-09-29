@@ -148,7 +148,7 @@ test('shortcut targets page content once and disappears when page content is rem
   const env = environment(); const card = env.add('button', '深度研究'); let clicks = 0;
   card.addEventListener('click', () => clicks++); env.run();
   const menu = env.document.getElementById('gcMenu');
-  menu.children[3].dispatchEvent(new env.Event('click'));
+  menu.children[2].dispatchEvent(new env.Event('click'));
   assert.equal(clicks, 1);
   card.remove(); env.mutate(); env.advance(1000);
   assert.equal(env.document.getElementById('gcFab').style.display, 'none');
@@ -176,12 +176,15 @@ test('hidden pages suspend scanning and BFCache-style pageshow resumes it', () =
   assert.equal(env.state.queries, initial + 2);
 });
 
-test('hidden targets are excluded; a model-only page still gets the shortcut', () => {
+test('hidden targets are excluded; model name alone does not create a shortcut', () => {
   const env = environment(); const hidden = env.add('button', '深度研究'); hidden.setAttribute('hidden', '');
   env.run(); assert.equal(env.document.getElementById('gcFab'), null);
+  // “切换模型”入口已按需求移除：只有模型名的页面不应出现快捷入口。
   env.add('button', 'ChatGPT 5.6 Sol'); env.mutate(); env.advance(1000);
+  assert.equal(env.document.getElementById('gcFab'), null);
+  env.add('button', '深度研究'); env.mutate(); env.advance(1000);
   const menu = env.document.getElementById('gcMenu');
-  assert.equal(menu.children[0].style.display, 'block');
+  assert.equal(menu.children[2].style.display, 'block');
   assert.equal(menu.children[3].style.display, 'none');
 });
 
