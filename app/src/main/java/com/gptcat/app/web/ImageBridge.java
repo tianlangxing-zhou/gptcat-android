@@ -19,7 +19,6 @@ import com.gptcat.app.R;
 import com.gptcat.app.download.DownloadCenter;
 import com.gptcat.app.image.ImageFiles;
 import com.gptcat.app.notify.NotificationHelper;
-import com.gptcat.app.ui.ThemeController;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -420,27 +419,6 @@ public final class ImageBridge {
         }
 
         return "{\"images\":" + freed + ",\"web\":" + web + "}";
-    }
-
-    /** mode: dark | light | auto；返回实际生效的 dark/light。 */
-    @JavascriptInterface
-    public synchronized String setTheme(String value, String mode) {
-        if (!allowed(value)) return "";
-
-        Activity activity = activityRef.get();
-        if (activity == null) return "";
-
-        ThemeController.setMode(context, mode);
-        boolean dark = ThemeController.isDark(context);
-
-        activity.runOnUiThread(() -> {
-            Activity current = activityRef.get();
-            if (current != null && !current.isFinishing() && !current.isDestroyed()) {
-                ThemeController.apply(current, dark);
-            }
-        });
-
-        return dark ? "dark" : "light";
     }
 
     private boolean clearWebCache() {

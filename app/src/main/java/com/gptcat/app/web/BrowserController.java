@@ -30,7 +30,6 @@ import android.widget.ProgressBar;
 import com.gptcat.app.ImageViewerActivity;
 import com.gptcat.app.R;
 import com.gptcat.app.download.DownloadCenter;
-import com.gptcat.app.ui.ThemeController;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -92,9 +91,7 @@ public final class BrowserController {
         view.setFocusable(true);
         view.setFocusableInTouchMode(true);
 
-        // 还原上次选择的深浅色：系统栏、窗口与 WebView 底色一起切，避免闪白。
-        ThemeController.apply(activity, ThemeController.isDark(activity));
-
+        // 系统栏与窗口底色由 MainActivity 统一设置为浅色，这里只保证 WebView 自身白底。
         // 网页自身发起的下载（含 Content-Disposition 附件、blob:）在这里兜底，
         // 否则 WebView 会静默忽略，表现为「点了没反应」。
         view.setDownloadListener(this::onDownloadRequest);

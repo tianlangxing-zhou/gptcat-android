@@ -13,8 +13,7 @@
     { key: '返回首页', icon: '🏠' },
     { key: '升级套餐', icon: '⭐' },
     { key: '下载任务', icon: '⬇️', action: 'downloads' },
-    { key: '图片缓存', icon: '🧹', action: 'cache' },
-    { key: '深色模式', icon: '🌙', action: 'theme' }
+    { key: '图片缓存', icon: '🧹', action: 'cache' }
   ];
 
   // 避免扫描聊天正文中的所有 div/section/p；入口通常只存在于交互区或导航区。
@@ -49,13 +48,12 @@
   var dockTimer = null;
   var docked = false;
 
-  // 下载任务 / 设置面板与深浅色
+  // 下载任务 / 图片缓存面板
   var panel = null;
   var panelKind = '';
   var tasksTimer = null;
   var tasks = [];
   var localTasks = [];
-  var THEME_KEY = 'gcTheme';
 
   // 只有用户真实点到可编辑控件，才给后续 focus 一个很短的许可窗口。
   var keyboardArmedUntil = 0;
@@ -507,12 +505,12 @@
 
     bindFabDrag();
     applyFabPos();
-    syncMenuLabels();
     scheduleDock();
   }
 
-  // ---------------------------------------------------------------- 深色模式
+  // ---------------------------------------------------------------- 主题
 
+  // 只为根页面和本插件 UI 提供浅色兜底，不覆写站点所有 div/button。
   var LIGHT_CSS =
     ':root{--gc-bg:#fff;--gc-fg:#1f2937;--gc-muted:#6b7280;'
     + '--gc-border:#e5e7eb;--gc-accent:#1f6feb;--gc-card:#f8fafc}'
@@ -520,44 +518,7 @@
     + '-webkit-text-size-adjust:100%;text-size-adjust:100%}'
     + 'input,textarea,[contenteditable="true"]{color:#111}';
 
-  // 站点本身是浅色设计，用一次整体反色得到真正可读的深色，再把图片/视频反回来。
-  var DARK_CSS =
-    ':root{--gc-bg:#171b24;--gc-fg:#e6e8ee;--gc-muted:#9aa3b2;'
-    + '--gc-border:#2a303c;--gc-accent:#5b8def;--gc-card:#1d2230}'
-    + 'html{background:#10131a!important;'
-    + '-webkit-filter:invert(.92) hue-rotate(180deg);filter:invert(.92) hue-rotate(180deg)}'
-    + 'html,body,#app{background-color:#10131a;color:#e6e8ee;color-scheme:dark}'
-    + 'img,video,picture,canvas,svg,iframe,[data-gc-ui],'
-    + '[data-gc-ui] *{-webkit-filter:invert(1) hue-rotate(180deg);'
-    + 'filter:invert(1) hue-rotate(180deg)}';
-
-  function themeMode() {
-    try {
-      return localStorage.getItem(THEME_KEY) || 'auto';
-    } catch (e) {
-      return 'auto';
-    }
-  }
-
-  function systemDark() {
-    return typeof window.matchMedia === 'function'
-      && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  }
-
-  function isDark() {
-    var mode = themeMode();
-    if (mode === 'dark') return true;
-    if (mode === 'light') return false;
-    return systemDark();
-  }
-
-  function themeLabel() {
-    var mode = themeMode();
-    return mode === 'dark' ? '深色' : (mode === 'light' ? '浅色' : '跟随系统');
-  }
-
-  function applyTheme(sync) {
-    var dark = isDark();
+  function applyAdaptiveStyle() {
     var style = document.getElementById('gc-theme');
 
     if (!style) {
@@ -566,46 +527,11 @@
       (document.head || document.documentElement).appendChild(style);
     }
 
-    var css = dark ? DARK_CSS : LIGHT_CSS;
-    if (style.textContent !== css) style.textContent = css;
-
-    var bridge = window.GptCatBridge;
-    if (sync && bridge && typeof bridge.setTheme === 'function') {
-      try {
-        bridge.setTheme(bridgeToken, dark ? 'dark' : 'light');
-      } catch (e) { }
-    }
-
-    if (rows.length) syncMenuLabels();
+    if (style.textContent !== LIGHT_CSS) style.textContent = LIGHT_CSS;
   }
 
-  function toggleTheme() {
-    var next = isDark() ? 'light' : 'dark';
-
-    try {
-      localStorage.setItem(THEME_KEY, next);
-    } catch (e) { }
-
-    applyTheme(true);
-    setDownloadChip(next === 'dark' ? '已切换到深色模式' : '已切换到浅色模式', false);
-    hideDownloadChipLater(2200);
-  }
-
-  function syncMenuLabels() {
-    for (var i = 0; i < rows.length && i < ITEMS.length; i++) {
-      var item = ITEMS[i];
-      if (!item.action) continue;
-
-      if (item.action === 'theme') {
-        rows[i].textContent = item.icon + '  ' + item.key + '：' + themeLabel();
-      } else {
-        rows[i].textContent = item.icon + '  ' + item.key;
-      }
-    }
-  }
-
-  // 只为根页面和本插件 UI 提供浅色/自适应兜底，不覆写站点所有 div/button。
-  function applyAdaptiveStyle() {
+  // 插件自身 UI 的字体与自适应规则：站点所有 div/button 都不覆写。
+  function applyPluginStyle() {
     if (document.getElementById('gc-adaptive')) return;
 
     var style = mark(document.createElement('style'));
@@ -635,7 +561,7 @@
     if (suspended || document.hidden || !document.body) return;
 
     applyAdaptiveStyle();
-    applyTheme(false);
+    applyPluginStyle();
     enhanceChatLayout();
     targets = scanTargets();
 
@@ -646,7 +572,7 @@
       build();
     }
 
-    // 闪电常驻：下载任务/图片缓存/深色模式属于本地功能，不依赖站点按钮。
+    // 闪电常驻：下载任务/图片缓存属于本地功能，不依赖站点按钮。
     fab.style.display = 'flex';
 
     rows.forEach(function (row, index) {
@@ -992,11 +918,6 @@
   }
 
   function runAction(action) {
-    if (action === 'theme') {
-      toggleTheme();
-      return;
-    }
-
     openPanel(action === 'downloads' ? 'downloads' : 'cache');
   }
 
@@ -2089,21 +2010,6 @@
     } catch (e) { }
   }
 
-  // 跟随系统时，系统切换深浅色要即时生效。
-  if (typeof window.matchMedia === 'function') {
-    var media = window.matchMedia('(prefers-color-scheme: dark)');
-    var onSchemeChange = function () {
-      if (themeMode() === 'auto') applyTheme(true);
-    };
-
-    if (typeof media.addEventListener === 'function') {
-      media.addEventListener('change', onSchemeChange);
-    } else if (typeof media.addListener === 'function') {
-      media.addListener(onSchemeChange);
-    }
-  }
-
-  applyTheme(true);
   observe();
   refresh();
 })('__GC_BRIDGE_TOKEN__');

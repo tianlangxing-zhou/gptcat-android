@@ -309,7 +309,7 @@ test('oversized images are rejected before opening a native transfer', async () 
   await settle(() => env.state.alerts.length > 0); assert.match(env.state.alerts[0], /32 MiB/);
 });
 
-// ---------------------------------------------------------------- 第九轮：下载 / 缓存 / 深色
+// ---------------------------------------------------------------- 第九轮：下载 / 缓存
 
 function menuRow(env, index) {
   return env.document.getElementById('gcMenu').children[index];
@@ -336,30 +336,9 @@ function clickDocument(env, node) {
 test('menu exposes local actions that work without page targets', () => {
   const env = environment(); env.add('button', '深度研究'); env.run();
   const menu = env.document.getElementById('gcMenu');
-  assert.equal(menu.children.length, 9);
+  assert.equal(menu.children.length, 8);
   assert.equal(menu.children[6].style.display, 'block', '下载任务应始终可用');
   assert.equal(menu.children[7].style.display, 'block', '图片缓存应始终可用');
-  assert.equal(menu.children[8].style.display, 'block', '深色模式应始终可用');
-});
-
-test('theme row toggles dark mode, persists it and syncs the native bar', () => {
-  const env = environment(); env.add('button', '深度研究'); env.run();
-  const calls = [];
-  env.window.GptCatBridge = {setTheme(token, mode) { calls.push(mode); return mode; }};
-  env.run();
-
-  openMenu(env);
-  clickNode(env, menuRow(env, 8));
-
-  assert.equal(env.store.get('gcTheme'), 'dark');
-  assert.deepEqual(calls, ['dark']);
-  assert.match(env.document.getElementById('gc-theme').textContent, /color-scheme:dark/);
-  assert.equal(menuRow(env, 8).textContent.includes('深色'), true);
-
-  openMenu(env);
-  clickNode(env, menuRow(env, 8));
-  assert.equal(env.store.get('gcTheme'), 'light');
-  assert.deepEqual(calls, ['dark', 'light']);
 });
 
 test('cache panel reports stats and clears the requested kind', () => {
