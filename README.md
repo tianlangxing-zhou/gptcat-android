@@ -1,6 +1,10 @@
-# GPTCat Android 1.0.10 修订包
+# GPTCat Android 1.0.11 修订包
 
 WebView 壳应用「佐助」，包名 `com.gptcat.app`（**不要改**：改了无法覆盖安装，登录态会丢）。
+
+## 1.0.11 已落地
+
+- **修复站点「设置」弹窗里「常规 / 数据管理」标签切不回去**：标签栏左端有一个装饰用的渐变遮罩层（`position:sticky` + `z-index:1`，只有 `mask-image`，class 带 `md:hidden`），它默认 `pointer-events:auto`，正好压住第一枚标签「常规」，把点击整块吃掉 —— 表现是「数据管理 能点、返回 常规 点不动」。注入样式让标签栏里的非 `[role="tab"]` 子元素一律点击穿透。
 
 ## 1.0.10 已落地
 

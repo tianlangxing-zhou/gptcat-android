@@ -1842,13 +1842,19 @@
   }
 
   function ensureChatLayoutStyle() {
-    if (document.getElementById('gc-chat-layout-v6')) return;
+    if (document.getElementById('gc-chat-layout-v7')) return;
 
     var style = mark(document.createElement('style'));
-    style.id = 'gc-chat-layout-v6';
+    style.id = 'gc-chat-layout-v7';
     style.textContent =
       'html,body{overscroll-behavior-y:contain!important;}'
       + '[data-gc-hidden-disclaimer]{display:none!important;}'
+      // 站点「设置」弹窗的标签栏左端有一个 position:sticky + z-index:1 的渐变遮罩
+      // （class 里带 sticky/z-1/md:hidden，只有 mask-image，纯装饰）。
+      // 它默认 pointer-events:auto，正好压住第一枚标签，把「常规」的点击整块吃掉 ——
+      // 表现就是「数据管理 能点、返回 常规 点不动」。tablist 的非 tab 子元素一律
+      // 让它穿透；标签自身的点击不受影响（标签在遮罩下层，事件照常命中）。
+      + '[role="tablist"]>:not([role="tab"]){pointer-events:none!important;}'
       + '[data-gc-composer-shell]{'
       + 'position:sticky!important;bottom:0!important;z-index:2147481000!important;'
       + 'margin-top:auto!important;padding-bottom:max(env(safe-area-inset-bottom),4px)!important;'
@@ -1894,5 +1900,6 @@
 
   observe();
   refresh();
+
 
 })('__GC_BRIDGE_TOKEN__');

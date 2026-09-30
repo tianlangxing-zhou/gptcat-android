@@ -280,6 +280,23 @@ test('editing surfaces never trigger image preview even when they contain an ima
   assert.equal(calls, 0, '输入区（composer/form）内的图片不得进入预览');
 });
 
+test('decorative non-tab children of a tablist are made click-through', () => {
+  const env = environment();
+  env.run();
+
+  const style = env.document.getElementById('gc-chat-layout-v7');
+  assert.ok(style, '布局修正样式表应已注入');
+
+  // 站点「设置」弹窗标签栏左端有个 position:sticky + z-index:1 的渐变遮罩，
+  // 默认 pointer-events:auto，会把第一枚标签的点击整块吃掉
+  // （真机现象：「数据管理」能点、返回「常规」点不动）。
+  assert.match(
+    style.textContent,
+    /\[role="tablist"\]>:not\(\[role="tab"\]\)\{pointer-events:none!important;\}/,
+    '标签栏里的非 tab 装饰层必须放行点击'
+  );
+});
+
 test('page buttons no longer build our own menu', () => {
   const env = environment(); const hidden = env.add('button', '深度研究'); hidden.setAttribute('hidden', '');
   env.run();

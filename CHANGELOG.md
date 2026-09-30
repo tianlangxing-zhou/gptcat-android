@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.11
+- Fixed the site settings dialog's tab strip: switching back to the first tab (常规) did nothing, while switching to the second one (数据管理) worked. Root cause: the site renders a decorative gradient-mask element at the start of the tab strip (`position:sticky`, `z-index:1`, only a `mask-image`, `md:hidden`) which defaults to `pointer-events:auto` and sits exactly on top of the first tab, swallowing the tap. The site's own tab logic is fine — a synthetic `.click()` switches both ways. We now inject a rule making non-`[role="tab"]` children of any `[role="tablist"]` click-through.
+
 ## 1.0.10
 - Fixed the light/dark regression from 1.0.9: `Theme.Material.NoActionBar` made targetSdk ≥ 33 WebViews report `prefers-color-scheme: dark`, so the site rendered in dark and the launch window flashed dark. Now uses a light theme plus a forced `UI_MODE_NIGHT_NO` in `attachBaseContext`. The image viewer stays dark on purpose.
 - Consumed window insets in `WindowInsetsHelper` so the safe area is no longer applied twice (root padding + CSS `env(safe-area-inset-*)`).
