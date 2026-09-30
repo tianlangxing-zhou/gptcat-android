@@ -167,7 +167,7 @@ public final class UpdateChecker {
                 Notification notification =
                         NotificationHelper.builder(
                                         context, NotificationHelper.CHANNEL_UPDATES)
-                                .setContentTitle("发现 GPTCat 新版本 " + latest)
+                                .setContentTitle("发现 佐助 新版本 " + latest)
                                 .setContentText("当前 " + current + "，点击查看更新")
                                 .setContentIntent(pending)
                                 .setCategory(Notification.CATEGORY_STATUS)
@@ -181,7 +181,7 @@ public final class UpdateChecker {
         new Handler(Looper.getMainLooper()).post(() ->
                 Toast.makeText(
                         context,
-                        "发现 GPTCat 新版本 " + latest + "，可前往 GitHub 更新",
+                        "发现 佐助 新版本 " + latest + "，可前往 GitHub 更新",
                         Toast.LENGTH_LONG).show());
     }
 }

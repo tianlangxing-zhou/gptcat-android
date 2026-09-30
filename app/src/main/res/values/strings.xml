@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">GPTCat</string>
+    <string name="app_name">佐助</string>
     <string name="image_description">对话图片</string>
     <string name="image_close">关闭</string>
     <string name="image_save">保存到相册</string>

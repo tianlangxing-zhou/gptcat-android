@@ -30,13 +30,13 @@ public final class NotificationHelper {
                 CHANNEL_DOWNLOADS,
                 "文件下载",
                 NotificationManager.IMPORTANCE_DEFAULT);
-        downloads.setDescription("GPTCat 文件下载完成通知");
+        downloads.setDescription("佐助 文件下载完成通知");
 
         NotificationChannel updates = new NotificationChannel(
                 CHANNEL_UPDATES,
                 "应用更新",
                 NotificationManager.IMPORTANCE_DEFAULT);
-        updates.setDescription("GPTCat 新版本提醒");
+        updates.setDescription("佐助 新版本提醒");
 
         manager.createNotificationChannel(downloads);
         manager.createNotificationChannel(updates);
