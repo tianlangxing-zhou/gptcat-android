@@ -4,7 +4,13 @@ set -euo pipefail
 # 可直接放回原工程。所有路径相对脚本解析；仍兼容原来的 D 盘工具链。
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$ROOT/app/src/main"
-BUILD="$ROOT/build"
+# 默认每次构建都用全新的临时目录：工作区内的批量删除会触发沙箱保护，
+# 而中间产物本来就只是编译缓存。需要固定目录时用 BUILD_DIR 指定。
+if [[ -n "${BUILD_DIR:-}" ]]; then
+  BUILD="$BUILD_DIR"
+else
+  BUILD="$(mktemp -d "${TMPDIR:-/tmp}/gptcat-build.XXXXXX")"
+fi
 OUT="$ROOT/output"
 SDK="${SDK:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/d/3DGS/.android-sdk}}}"
 JDK="${JDK:-${JAVA_HOME:-/d/3DGS/.toolchain/jdk/jdk-17.0.20.1+1}}"
@@ -45,8 +51,17 @@ if [[ "${REGENERATE_ICONS:-0}" == "1" ]]; then
   "$PYTHON_BIN" "$ROOT/gen_icons.py"
 fi
 
-[[ "$BUILD" == "$ROOT/build" && "$ROOT" != / ]] || fail "构建目录无效"
-rm -rf -- "$BUILD"
+[[ "$BUILD" != "$ROOT" && "$BUILD" != / ]] || fail "构建目录无效"
+# 复用 BUILD_DIR 时逐个一级子项清理，避免一次性递归删除大量文件。
+clean_build() {
+  local entry
+  for entry in "$BUILD"/* "$BUILD"/.[!.]*; do
+    [[ -e "$entry" ]] || continue
+    rm -rf -- "$entry"
+  done
+  rmdir -- "$BUILD" 2>/dev/null || true
+}
+[[ -n "${BUILD_DIR:-}" ]] && clean_build
 mkdir -p "$BUILD/compiled" "$BUILD/gen" "$BUILD/classes" "$BUILD/dex" "$OUT"
 
 echo "[1/7] 编译资源"

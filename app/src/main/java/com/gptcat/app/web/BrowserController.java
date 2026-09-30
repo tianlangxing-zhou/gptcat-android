@@ -29,6 +29,8 @@ import android.widget.ProgressBar;
 
 import com.gptcat.app.ImageViewerActivity;
 import com.gptcat.app.R;
+import com.gptcat.app.download.DownloadCenter;
+import com.gptcat.app.ui.ThemeController;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -89,6 +91,13 @@ public final class BrowserController {
         view.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         view.setFocusable(true);
         view.setFocusableInTouchMode(true);
+
+        // 还原上次选择的深浅色：系统栏、窗口与 WebView 底色一起切，避免闪白。
+        ThemeController.apply(activity, ThemeController.isDark(activity));
+
+        // 网页自身发起的下载（含 Content-Disposition 附件、blob:）在这里兜底，
+        // 否则 WebView 会静默忽略，表现为「点了没反应」。
+        view.setDownloadListener(this::onDownloadRequest);
 
         WebSettings settings = view.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -188,6 +197,52 @@ public final class BrowserController {
         return false;
     }
 
+    /**
+     * 网页发起的下载兜底：
+     * http(s) 直接进系统下载；blob:/data: 交回页面取内容后分块落盘。
+     * 两种情况都会回调 JS 显示提示，避免「点了没反应」。
+     */
+    private void onDownloadRequest(String url, String userAgent, String contentDisposition,
+                                   String mimeType, long contentLength) {
+        if (url == null || destroyed) return;
+
+        if (url.startsWith("blob:") || url.startsWith("data:")) {
+            callJs("window.__gcBlobDownload&&window.__gcBlobDownload("
+                    + quote(url) + "," + quote(mimeType == null ? "" : mimeType) + ")");
+            return;
+        }
+
+        if (!UrlPolicy.isHttpUrl(url)) return;
+
+        String name = DownloadCenter.nameFromDisposition(contentDisposition, url);
+        String id = DownloadCenter.enqueue(activity, url, name, mimeType);
+
+        if (id.isEmpty()) {
+            callJs("window.__gcDownloadFailed&&window.__gcDownloadFailed(" + quote(name) + ")");
+            return;
+        }
+
+        callJs("window.__gcOnNativeDownload&&window.__gcOnNativeDownload("
+                + quote(id) + "," + quote(name) + ")");
+    }
+
+    private void callJs(String script) {
+        WebView view = webView;
+        if (view == null || destroyed) return;
+
+        try {
+            view.evaluateJavascript("(function(){" + script + ";})();", null);
+        } catch (RuntimeException ignored) { }
+    }
+
+    private static String quote(String value) {
+        try {
+            return org.json.JSONObject.quote(value == null ? "" : value);
+        } catch (RuntimeException e) {
+            return "\"\"";
+        }
+    }
+
     public void onResume() {
         paused = false;
         if (webView != null) {
@@ -229,6 +284,7 @@ public final class BrowserController {
         } catch (RuntimeException ignored) { }
 
         view.setOnLongClickListener(null);
+        view.setDownloadListener(null);
 
         if (view.getParent() instanceof ViewGroup) {
             ((ViewGroup) view.getParent()).removeView(view);

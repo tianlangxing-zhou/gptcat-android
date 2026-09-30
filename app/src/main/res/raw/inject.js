@@ -11,7 +11,10 @@
     { key: '深度研究', icon: '🔍' },
     { key: '思维导图', icon: '🧠' },
     { key: '返回首页', icon: '🏠' },
-    { key: '升级套餐', icon: '⭐' }
+    { key: '升级套餐', icon: '⭐' },
+    { key: '下载任务', icon: '⬇️', action: 'downloads' },
+    { key: '图片缓存', icon: '🧹', action: 'cache' },
+    { key: '深色模式', icon: '🌙', action: 'theme' }
   ];
 
   // 避免扫描聊天正文中的所有 div/section/p；入口通常只存在于交互区或导航区。
@@ -45,6 +48,14 @@
 
   var dockTimer = null;
   var docked = false;
+
+  // 下载任务 / 设置面板与深浅色
+  var panel = null;
+  var panelKind = '';
+  var tasksTimer = null;
+  var tasks = [];
+  var localTasks = [];
+  var THEME_KEY = 'gcTheme';
 
   // 只有用户真实点到可编辑控件，才给后续 focus 一个很短的许可窗口。
   var keyboardArmedUntil = 0;
@@ -356,15 +367,23 @@
     menuTimer = window.setTimeout(hide, 4000);
   }
 
+  // 空闲后把闪电收进最近的侧边，只留一小截；点一下再展开。
+  var DOCK_PEEK = 12;
+
   function dockSide() {
     if (!fab || fab.style.display === 'none') return;
     if (menu && menu.style.display === 'block') return;
 
-    var cx = fabX != null ? fabX : fab.offsetLeft;
+    var vw = viewportWidth();
+    var size = vw >= 600 ? 54 : 48;
+    var center = (fabX != null ? fabX : fab.offsetLeft) + size / 2;
+    var dir = center <= vw / 2 ? -1 : 1;
+
     docked = true;
-    fab.style.transition = 'transform .25s ease';
+    fab.style.transition = 'transform .24s ease, opacity .24s ease';
     fab.style.transform =
-      'translateX(' + (cx < viewportWidth() / 2 ? -30 : 30) + 'px)';
+      'translateX(' + dir * (size - DOCK_PEEK) + 'px) scale(.9)';
+    fab.style.opacity = '.62';
   }
 
   function undock() {
@@ -372,6 +391,7 @@
 
     docked = false;
     fab.style.transform = '';
+    fab.style.opacity = '';
   }
 
   function scheduleDock() {
@@ -414,7 +434,7 @@
     fab.setAttribute('aria-controls', 'gcMenu');
     fab.style.cssText =
       'position:fixed;right:16px;bottom:110px;width:48px;height:48px;'
-      + 'border:0;border-radius:50%;background:rgba(31,111,235,.92);color:#fff;display:none;'
+      + 'border:0;border-radius:50%;background:var(--gc-accent,#1f6feb);color:#fff;display:none;'
       + 'align-items:center;justify-content:center;font-size:22px;z-index:2147483000;'
       + 'box-shadow:0 4px 12px rgba(0,0,0,.25);cursor:pointer;user-select:none;touch-action:none;';
 
@@ -422,7 +442,7 @@
     menu.id = 'gcMenu';
     menu.style.cssText =
       'position:fixed;right:16px;bottom:168px;z-index:2147483000;display:none;'
-      + 'background:#fff;border:1px solid #e5e7eb;border-radius:12px;'
+      + 'background:var(--gc-bg,#fff);border:1px solid var(--gc-border,#e5e7eb);border-radius:12px;'
       + 'box-shadow:0 6px 24px rgba(0,0,0,.15);padding:6px;min-width:150px;'
       + 'box-sizing:border-box;overscroll-behavior:contain;';
 
@@ -458,11 +478,18 @@
       row.className = 'gc-menu-row';
       row.textContent = item.icon + '  ' + (item.label || item.key);
       row.style.cssText =
-        'display:block;width:100%;border:0;background:#fff;text-align:left;'
-        + 'padding:10px 14px;border-radius:8px;font-size:14px;color:#1f2937;cursor:pointer;';
+        'display:block;width:100%;border:0;background:var(--gc-bg,#fff);text-align:left;'
+        + 'padding:10px 14px;border-radius:8px;font-size:14px;'
+        + 'color:var(--gc-fg,#1f2937);cursor:pointer;';
 
       row.addEventListener('click', function (event) {
         event.stopPropagation();
+
+        if (item.action) {
+          hide();
+          runAction(item.action);
+          return;
+        }
 
         targets = scanTargets();
         hide();
@@ -480,6 +507,101 @@
 
     bindFabDrag();
     applyFabPos();
+    syncMenuLabels();
+    scheduleDock();
+  }
+
+  // ---------------------------------------------------------------- 深色模式
+
+  var LIGHT_CSS =
+    ':root{--gc-bg:#fff;--gc-fg:#1f2937;--gc-muted:#6b7280;'
+    + '--gc-border:#e5e7eb;--gc-accent:#1f6feb;--gc-card:#f8fafc}'
+    + 'html,body,#app{background-color:#fff;color:#1f1f1f;color-scheme:light;'
+    + '-webkit-text-size-adjust:100%;text-size-adjust:100%}'
+    + 'input,textarea,[contenteditable="true"]{color:#111}';
+
+  // 站点本身是浅色设计，用一次整体反色得到真正可读的深色，再把图片/视频反回来。
+  var DARK_CSS =
+    ':root{--gc-bg:#171b24;--gc-fg:#e6e8ee;--gc-muted:#9aa3b2;'
+    + '--gc-border:#2a303c;--gc-accent:#5b8def;--gc-card:#1d2230}'
+    + 'html{background:#10131a!important;'
+    + '-webkit-filter:invert(.92) hue-rotate(180deg);filter:invert(.92) hue-rotate(180deg)}'
+    + 'html,body,#app{background-color:#10131a;color:#e6e8ee;color-scheme:dark}'
+    + 'img,video,picture,canvas,svg,iframe,[data-gc-ui],'
+    + '[data-gc-ui] *{-webkit-filter:invert(1) hue-rotate(180deg);'
+    + 'filter:invert(1) hue-rotate(180deg)}';
+
+  function themeMode() {
+    try {
+      return localStorage.getItem(THEME_KEY) || 'auto';
+    } catch (e) {
+      return 'auto';
+    }
+  }
+
+  function systemDark() {
+    return typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+
+  function isDark() {
+    var mode = themeMode();
+    if (mode === 'dark') return true;
+    if (mode === 'light') return false;
+    return systemDark();
+  }
+
+  function themeLabel() {
+    var mode = themeMode();
+    return mode === 'dark' ? '深色' : (mode === 'light' ? '浅色' : '跟随系统');
+  }
+
+  function applyTheme(sync) {
+    var dark = isDark();
+    var style = document.getElementById('gc-theme');
+
+    if (!style) {
+      style = mark(document.createElement('style'));
+      style.id = 'gc-theme';
+      (document.head || document.documentElement).appendChild(style);
+    }
+
+    var css = dark ? DARK_CSS : LIGHT_CSS;
+    if (style.textContent !== css) style.textContent = css;
+
+    var bridge = window.GptCatBridge;
+    if (sync && bridge && typeof bridge.setTheme === 'function') {
+      try {
+        bridge.setTheme(bridgeToken, dark ? 'dark' : 'light');
+      } catch (e) { }
+    }
+
+    if (rows.length) syncMenuLabels();
+  }
+
+  function toggleTheme() {
+    var next = isDark() ? 'light' : 'dark';
+
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch (e) { }
+
+    applyTheme(true);
+    setDownloadChip(next === 'dark' ? '已切换到深色模式' : '已切换到浅色模式', false);
+    hideDownloadChipLater(2200);
+  }
+
+  function syncMenuLabels() {
+    for (var i = 0; i < rows.length && i < ITEMS.length; i++) {
+      var item = ITEMS[i];
+      if (!item.action) continue;
+
+      if (item.action === 'theme') {
+        rows[i].textContent = item.icon + '  ' + item.key + '：' + themeLabel();
+      } else {
+        rows[i].textContent = item.icon + '  ' + item.key;
+      }
+    }
   }
 
   // 只为根页面和本插件 UI 提供浅色/自适应兜底，不覆写站点所有 div/button。
@@ -489,10 +611,7 @@
     var style = mark(document.createElement('style'));
     style.id = 'gc-adaptive';
     style.textContent =
-      'html,body,#app{background-color:#fff;color:#1f1f1f;color-scheme:light;'
-      + '-webkit-text-size-adjust:100%;text-size-adjust:100%}'
-      + 'input,textarea,[contenteditable="true"]{color:#111}'
-      + '[data-gc-ui]{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
+      '[data-gc-ui]{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
       + '-webkit-tap-highlight-color:transparent}'
       + '@media (min-width:600px){'
       + '#gcFab{width:54px!important;height:54px!important;font-size:24px!important;'
@@ -516,14 +635,9 @@
     if (suspended || document.hidden || !document.body) return;
 
     applyAdaptiveStyle();
+    applyTheme(false);
     enhanceChatLayout();
     targets = scanTargets();
-
-    var available = targets.some(Boolean);
-
-    if (!available && (!fab || !document.body.contains(fab))) {
-      return;
-    }
 
     if (!fab
         || !menu
@@ -532,13 +646,16 @@
       build();
     }
 
-    fab.style.display = available ? 'flex' : 'none';
+    // 闪电常驻：下载任务/图片缓存/深色模式属于本地功能，不依赖站点按钮。
+    fab.style.display = 'flex';
 
     rows.forEach(function (row, index) {
-      row.style.display = targets[index] ? 'block' : 'none';
+      // 本地功能项始终可用；页面入口项跟着页面按钮出现或消失。
+      row.style.display =
+        ITEMS[index].action || targets[index] ? 'block' : 'none';
     });
 
-    if (!available) hide();
+    if (!targets.some(Boolean) && !tasks.length) hide();
   }
 
   function runRefreshWhenIdle() {
@@ -774,11 +891,408 @@
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
   }
 
+  // ------------------------------------------------------------- 面板
+
+  function panelButton(label, handler) {
+    var button = mark(document.createElement('button'));
+    button.type = 'button';
+    button.textContent = label;
+    button.style.cssText =
+      'border:1px solid var(--gc-border,#e5e7eb);background:var(--gc-card,#f8fafc);'
+      + 'color:var(--gc-accent,#1f6feb);border-radius:8px;padding:7px 12px;'
+      + 'font-size:13px;cursor:pointer;';
+
+    button.addEventListener('click', function (event) {
+      event.stopPropagation();
+      handler();
+    });
+
+    return button;
+  }
+
+  function panelEl() {
+    if (panel) return panel;
+
+    panel = mark(document.createElement('div'));
+    panel.id = 'gcPanel';
+    panel.style.cssText =
+      'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);'
+      + 'width:min(420px,calc(100vw - 32px));max-height:72vh;overflow:auto;display:none;'
+      + 'background:var(--gc-bg,#fff);color:var(--gc-fg,#1f2937);'
+      + 'border:1px solid var(--gc-border,#e5e7eb);border-radius:14px;'
+      + 'box-shadow:0 12px 40px rgba(0,0,0,.28);z-index:2147483200;padding:14px;'
+      + 'box-sizing:border-box;font-size:14px;overscroll-behavior:contain;';
+
+    var header = mark(document.createElement('div'));
+    header.style.cssText =
+      'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
+
+    var title = mark(document.createElement('div'));
+    title.id = 'gcPanelTitle';
+    title.style.cssText = 'font-weight:600;font-size:15px;';
+
+    var close = mark(document.createElement('button'));
+    close.type = 'button';
+    close.textContent = '✕';
+    close.style.cssText =
+      'border:0;background:transparent;color:var(--gc-muted,#6b7280);'
+      + 'font-size:16px;cursor:pointer;padding:4px 8px;';
+
+    close.addEventListener('click', function (event) {
+      event.stopPropagation();
+      closePanel();
+    });
+
+    header.appendChild(title);
+    header.appendChild(close);
+
+    var body = mark(document.createElement('div'));
+    body.id = 'gcPanelBody';
+
+    panel.appendChild(header);
+    panel.appendChild(body);
+    document.body.appendChild(panel);
+
+    return panel;
+  }
+
+  function panelBody() {
+    return document.getElementById('gcPanelBody');
+  }
+
+  function openPanel(kind) {
+    panelEl();
+    panelKind = kind;
+
+    panel.style.display = 'block';
+    document.getElementById('gcPanelTitle').textContent =
+      kind === 'downloads' ? '下载任务' : '图片缓存';
+
+    // 面板打开时把闪电展开，避免它缩在侧边看不见。
+    cancelDock();
+
+    if (kind === 'downloads') {
+      refreshTasks();
+    } else {
+      renderCache('');
+    }
+  }
+
+  function closePanel() {
+    panelKind = '';
+
+    if (panel) panel.style.display = 'none';
+    if (tasksTimer !== null) {
+      window.clearTimeout(tasksTimer);
+      tasksTimer = null;
+    }
+
+    if (tasks.length) schedule();
+    scheduleDock();
+  }
+
+  function runAction(action) {
+    if (action === 'theme') {
+      toggleTheme();
+      return;
+    }
+
+    openPanel(action === 'downloads' ? 'downloads' : 'cache');
+  }
+
+  function refreshTasks() {
+    var bridge = window.GptCatBridge;
+
+    if (bridge && typeof bridge.listDownloads === 'function') {
+      var items = null;
+
+      try {
+        items = JSON.parse(String(bridge.listDownloads(bridgeToken) || '[]'));
+      } catch (e) {
+        items = null;
+      }
+
+      if (items && items.length) {
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          if (!item || !item.id) continue;
+
+          if (findTask(item.id)) {
+            updateTask(item.id, item);
+          } else {
+            addTask(item);
+          }
+        }
+      }
+    }
+
+    renderTasks();
+
+    if (panelKind === 'downloads') {
+      tasksTimer = window.setTimeout(refreshTasks, 1500);
+    }
+  }
+
+  function renderTasks() {
+    if (!panel || panelKind !== 'downloads') return;
+
+    var body = panelBody();
+    if (!body) return;
+
+    body.textContent = '';
+
+    if (!tasks.length) {
+      var empty = mark(document.createElement('div'));
+      empty.textContent = '暂无下载任务';
+      empty.style.cssText = 'color:var(--gc-muted,#6b7280);padding:12px 2px;';
+      body.appendChild(empty);
+      return;
+    }
+
+    tasks.forEach(function (task) {
+      var row = mark(document.createElement('div'));
+      row.style.cssText =
+        'border:1px solid var(--gc-border,#e5e7eb);border-radius:10px;'
+        + 'padding:10px;margin-bottom:8px;';
+
+      var head = mark(document.createElement('div'));
+      head.style.cssText = 'display:flex;justify-content:space-between;gap:8px;';
+
+      var name = mark(document.createElement('span'));
+      name.textContent = task.name || '下载文件';
+      name.style.cssText = 'font-weight:600;word-break:break-all;';
+
+      var status = mark(document.createElement('span'));
+      status.textContent = statusText(task.status)
+        + (task.percent >= 0 ? ' ' + Math.round(task.percent) + '%' : '');
+      status.style.cssText =
+        'color:var(--gc-muted,#6b7280);white-space:nowrap;font-size:12px;';
+
+      head.appendChild(name);
+      head.appendChild(status);
+
+      var track = mark(document.createElement('div'));
+      track.style.cssText =
+        'height:5px;border-radius:3px;background:var(--gc-border,#eceff3);'
+        + 'margin:8px 0;overflow:hidden;';
+
+      var fill = mark(document.createElement('div'));
+      var percent = task.status === 'success'
+        ? 100
+        : Math.max(0, Math.min(100, task.percent >= 0 ? task.percent : 0));
+      fill.style.cssText = 'height:100%;width:' + percent + '%;background:'
+        + (task.status === 'failed' ? '#ef4444' : 'var(--gc-accent,#1f6feb)') + ';';
+
+      track.appendChild(fill);
+
+      var actions = mark(document.createElement('div'));
+      actions.style.cssText = 'display:flex;gap:8px;align-items:center;';
+
+      var size = mark(document.createElement('span'));
+      size.textContent = task.total > 0
+        ? formatBytes(task.downloaded || 0) + ' / ' + formatBytes(task.total)
+        : (task.downloaded > 0 ? formatBytes(task.downloaded) : '');
+      size.style.cssText =
+        'flex:1;color:var(--gc-muted,#9ca3af);font-size:12px;';
+
+      actions.appendChild(size);
+
+      if (task.status === 'success') {
+        actions.appendChild(panelButton('打开', function () {
+          openTask(task.id);
+        }));
+      }
+
+      actions.appendChild(panelButton('移除', function () {
+        removeTask(task.id);
+      }));
+
+      row.appendChild(head);
+      row.appendChild(track);
+      row.appendChild(actions);
+      body.appendChild(row);
+    });
+  }
+
+  function openTask(id) {
+    var bridge = window.GptCatBridge;
+    if (!bridge || typeof bridge.openDownloadedFile !== 'function') return;
+
+    try {
+      bridge.openDownloadedFile(bridgeToken, id);
+    } catch (e) { }
+  }
+
+  function removeTask(id) {
+    var bridge = window.GptCatBridge;
+
+    if (bridge && typeof bridge.removeDownload === 'function') {
+      try {
+        bridge.removeDownload(bridgeToken, id);
+      } catch (e) { }
+    }
+
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i].id === id) {
+        tasks.splice(i, 1);
+        break;
+      }
+    }
+
+    renderTasks();
+  }
+
+  function renderCache(message) {
+    var body = panelBody();
+    if (!body) return;
+
+    body.textContent = '';
+
+    var stats = { images: 0, imageBytes: 0, webBytes: 0 };
+    var bridge = window.GptCatBridge;
+
+    if (bridge && typeof bridge.cacheStats === 'function') {
+      try {
+        stats = JSON.parse(String(bridge.cacheStats(bridgeToken) || '{}')) || stats;
+      } catch (e) { }
+    }
+
+    function line(label, value) {
+      var row = mark(document.createElement('div'));
+      row.style.cssText = 'display:flex;justify-content:space-between;padding:4px 0;';
+
+      var left = mark(document.createElement('span'));
+      left.textContent = label;
+      left.style.cssText = 'color:var(--gc-muted,#6b7280);';
+
+      var right = mark(document.createElement('span'));
+      right.textContent = value;
+
+      row.appendChild(left);
+      row.appendChild(right);
+      body.appendChild(row);
+    }
+
+    line('图片缓存文件', stats.images + ' 个');
+    line('图片缓存占用', formatBytes(stats.imageBytes) || '0 B');
+    line('网页缓存占用', formatBytes(stats.webBytes) || '0 B');
+
+    var actions = mark(document.createElement('div'));
+    actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;';
+
+    actions.appendChild(panelButton('清理图片缓存', function () {
+      clearCache('images');
+    }));
+    actions.appendChild(panelButton('清理网页缓存', function () {
+      clearCache('web');
+    }));
+    actions.appendChild(panelButton('全部清理', function () {
+      clearCache('all');
+    }));
+
+    body.appendChild(actions);
+
+    var result = mark(document.createElement('div'));
+    result.id = 'gcPanelResult';
+    result.textContent = message || '';
+    result.style.cssText =
+      'color:var(--gc-accent,#1f6feb);margin-top:10px;min-height:18px;font-size:13px;';
+
+    body.appendChild(result);
+
+    var note = mark(document.createElement('div'));
+    note.textContent = '清理网页缓存不会退出登录';
+    note.style.cssText =
+      'color:var(--gc-muted,#9ca3af);margin-top:8px;font-size:12px;';
+
+    body.appendChild(note);
+  }
+
+  function clearCache(kind) {
+    var bridge = window.GptCatBridge;
+    if (!bridge || typeof bridge.clearCache !== 'function') {
+      renderCache('当前版本不支持清理');
+      return;
+    }
+
+    var freed = 0;
+    var web = false;
+
+    try {
+      var parsed = JSON.parse(String(bridge.clearCache(bridgeToken, kind) || '{}')) || {};
+      freed = Number(parsed.images) || 0;
+      web = !!parsed.web;
+    } catch (e) { }
+
+    renderCache('已清理 ' + (formatBytes(freed) || '0 B')
+      + (web ? '，网页缓存已清空' : ''));
+  }
+
+  // ------------------------------------------------------------- 下载任务
+
+  var MAX_FILE_BYTES = 512 * 1024 * 1024;
+
+  function statusText(status) {
+    if (status === 'success') return '已完成';
+    if (status === 'failed') return '失败';
+    if (status === 'paused') return '已暂停';
+    if (status === 'pending') return '等待中';
+    if (status === 'running') return '下载中';
+    return '处理中';
+  }
+
+  function addTask(task) {
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i].id === task.id) {
+        tasks[i] = mergeTask(tasks[i], task);
+        renderTasks();
+        return;
+      }
+    }
+
+    tasks.unshift(task);
+    if (tasks.length > 20) tasks.length = 20;
+    renderTasks();
+    schedule();
+  }
+
+  function mergeTask(base, patch) {
+    var merged = {};
+
+    for (var key in base) {
+      if (Object.prototype.hasOwnProperty.call(base, key)) merged[key] = base[key];
+    }
+    for (var name in patch) {
+      if (Object.prototype.hasOwnProperty.call(patch, name)) merged[name] = patch[name];
+    }
+
+    return merged;
+  }
+
+  function updateTask(id, patch) {
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i].id !== id) continue;
+
+      tasks[i] = mergeTask(tasks[i], patch);
+      renderTasks();
+      return;
+    }
+  }
+
+  function findTask(id) {
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i].id === id) return tasks[i];
+    }
+    return null;
+  }
+
+  /** 单个系统任务的进度轮询：同时更新提示条与任务列表。 */
   function trackDownload(id, name) {
     var bridge = window.GptCatBridge;
     if (!bridge || typeof bridge.getDownloadProgress !== 'function') return;
 
     activeDownloads[id] = true;
+    addTask({ id: id, name: name, status: 'pending', percent: -1, downloaded: 0, total: -1 });
 
     function poll() {
       if (!activeDownloads[id] || suspended) return;
@@ -798,6 +1312,7 @@
 
       if (status === 'success') {
         delete activeDownloads[id];
+        updateTask(id, { status: 'success', percent: 100, downloaded: downloaded, total: total });
         setDownloadChip('下载完成：' + name + ' · 点击打开', true);
 
         var chip = downloadChip();
@@ -808,11 +1323,13 @@
         };
 
         hideDownloadChipLater(8000);
+        schedule();
         return;
       }
 
       if (status === 'failed') {
         delete activeDownloads[id];
+        updateTask(id, { status: 'failed' });
         setDownloadChip('下载失败：' + name, false);
         hideDownloadChipLater(4500);
         return;
@@ -824,6 +1341,7 @@
         trackDownload._misses = misses;
         if (misses > 8) {
           delete activeDownloads[id];
+          updateTask(id, { status: 'failed' });
           setDownloadChip('无法读取下载状态：' + name, false);
           hideDownloadChipLater(3500);
           return;
@@ -831,6 +1349,13 @@
       } else {
         trackDownload._misses = 0;
       }
+
+      updateTask(id, {
+        status: status,
+        percent: percent,
+        downloaded: downloaded,
+        total: total
+      });
 
       var detail = '';
       if (percent >= 0) {
@@ -851,45 +1376,224 @@
     poll();
   }
 
-  document.addEventListener('click', function (event) {
+  /** 网页生成的 blob:/data: 文件：取回内容后分块落盘到「下载」。 */
+  function blobDownload(url, name) {
     var bridge = window.GptCatBridge;
-    if (!bridge || typeof bridge.downloadFile !== 'function') return;
+    var fileName = name || '佐助下载';
 
-    var target = event.target && event.target.closest
-      ? event.target.closest('a')
-      : null;
-
-    if (!target || !/^https?:\/\//i.test(target.href || '')) return;
-    if (target.closest && target.closest('[data-gc-ui]')) return;
-
-    var marked = target.hasAttribute('download');
-    var fileLike =
-      /\.(zip|7z|rar|pdf|doc|docx|xls|xlsx|ppt|pptx|csv|apk|png|jpg|jpeg|gif|webp|txt|md|json|mp3|wav|mp4)(\?|#|$)/i
-        .test(target.href);
-
-    if (!marked && !fileLike) return;
-
-    var downloadName = target.getAttribute('download') || '';
-
-    if (!downloadName) {
-      try {
-        downloadName = decodeURIComponent(
-          target.href.split('/').pop().split('?')[0].split('#')[0]
-        );
-      } catch (e) {
-        downloadName = '';
-      }
+    if (!bridge || typeof bridge.beginFile !== 'function') {
+      setDownloadChip('当前版本无法保存该文件：' + fileName, false);
+      hideDownloadChipLater(4500);
+      return;
     }
 
-    if (!downloadName) downloadName = 'gptcat-download';
+    var taskId = 'blob:' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    addTask({ id: taskId, name: fileName, status: 'running', percent: 0, downloaded: 0, total: -1 });
+    setDownloadChip('正在准备文件：' + fileName, false);
+
+    fetch(url)
+      .then(function (response) {
+        if (!response || !response.ok) {
+          throw new Error('HTTP ' + (response ? response.status : '未知'));
+        }
+        return response.blob();
+      })
+      .then(function (blob) {
+        if (!blob || !blob.size) throw new Error('文件为空');
+        if (blob.size > MAX_FILE_BYTES) throw new Error('文件超过 512 MiB 限制');
+
+        var id = bridge.beginFile(bridgeToken, fileName, blob.type || '', blob.size);
+        if (!id) throw new Error('无法开始保存');
+
+        var offset = 0;
+        var chunks = Math.max(1, Math.ceil(blob.size / CHUNK_BYTES));
+
+        function next() {
+          if (suspended) throw new Error('页面已离开');
+
+          if (offset >= blob.size) {
+            var saved = bridge.finishFile(bridgeToken, id);
+            if (!saved) throw new Error('保存失败');
+
+            updateTask(taskId, {
+              id: saved,
+              name: fileName,
+              status: 'success',
+              percent: 100,
+              downloaded: blob.size,
+              total: blob.size
+            });
+
+            setDownloadChip('已保存到 下载/' + '佐助：' + fileName, false);
+            hideDownloadChipLater(5000);
+            schedule();
+            return null;
+          }
+
+          var slice = blob.slice(offset, offset + CHUNK_BYTES);
+
+          return readChunk(slice).then(function (encoded) {
+            if (!bridge.appendFile(bridgeToken, id, encoded)) {
+              bridge.cancelFile(bridgeToken, id);
+              throw new Error('写入中断');
+            }
+
+            offset += CHUNK_BYTES;
+            updateTask(taskId, {
+              percent: Math.min(99, Math.round(offset * 100 / blob.size)),
+              downloaded: Math.min(offset, blob.size),
+              total: blob.size
+            });
+
+            return next();
+          });
+        }
+
+        return Promise.resolve().then(next);
+      })
+      .catch(function (error) {
+        updateTask(taskId, { status: 'failed' });
+        setDownloadChip(
+          '保存失败：' + fileName + '（' + (error && error.message ? error.message : '未知原因') + '）',
+          false);
+        hideDownloadChipLater(5000);
+      });
+  }
+
+  window.__gcBlobDownload = function (url, mime) {
+    var name = '佐助下载';
+
+    try {
+      var path = String(url).split('/').pop().split('?')[0];
+      if (path && path.length <= 80) name = decodeURIComponent(path);
+    } catch (e) { }
+
+    if (mime) name = name + extensionOf(mime);
+
+    blobDownload(url, name);
+  };
+
+  function extensionOf(mime) {
+    if (/zip/i.test(mime)) return '.zip';
+    if (/pdf/i.test(mime)) return '.pdf';
+    if (/json/i.test(mime)) return '.json';
+    if (/csv/i.test(mime)) return '.csv';
+    if (/plain/i.test(mime)) return '.txt';
+    if (/png/i.test(mime)) return '.png';
+    if (/jpe?g/i.test(mime)) return '.jpg';
+    return '';
+  }
+
+  /** 原生 DownloadListener 已接手 http(s) 下载时回调，补上提示与任务项。 */
+  window.__gcOnNativeDownload = function (id, name) {
+    if (!id) return;
+    var task = findTask(id);
+    if (task) return;
+
+    addTask({ id: id, name: name || '下载文件', status: 'pending', percent: -1, downloaded: 0, total: -1 });
+    setDownloadChip('开始下载：' + (name || '下载文件'), true);
+
+    var chip = downloadChip();
+    chip.onclick = function () {
+      openPanel('downloads');
+    };
+
+    hideDownloadChipLater(4000);
+    trackDownload(id, name || '下载文件');
+  };
+
+  window.__gcDownloadFailed = function (name) {
+    setDownloadChip('下载未能开始：' + (name || '该文件') + '，可长按链接重试', false);
+    hideDownloadChipLater(5000);
+  };
+
+  /** 判断元素文字是否明确表示下载动作。 */
+  function downloadText(node) {
+    if (!node) return false;
+
+    var raw = (node.textContent || '').trim();
+    if (!raw || raw.length > 30) return false;
+    if (!/下载|导出|保存到本地|download|export/i.test(raw)) return false;
+
+    return !/(下载任务|不限|下载量)/i.test(raw);
+  }
+
+  /** 非 a 元素：向上找一层带 href 的容器，找不到就交给原生兜底。 */
+  function linkFrom(node) {
+    if (!node || !node.closest) return null;
+
+    var anchor = node.closest('a[href]');
+    if (anchor) return anchor;
+
+    var box = node.closest('button,[role="button"],li,div,span');
+    if (!box) return null;
+
+    return box.querySelector ? box.querySelector('a[href]') : null;
+  }
+
+  function fileNameFrom(anchor, href) {
+    var named = '';
+
+    if (anchor && anchor.getAttribute) {
+      named = anchor.getAttribute('download') || '';
+    }
+
+    if (named) return named;
+
+    try {
+      named = decodeURIComponent(href.split('/').pop().split('?')[0].split('#')[0]);
+    } catch (e) {
+      named = '';
+    }
+
+    if (!named || named.length > 80 || named.indexOf('=') >= 0) {
+      named = '佐助下载-' + Date.now() + extensionOf('');
+    }
+
+    return named;
+  }
+
+  document.addEventListener('click', function (event) {
+    var bridge = window.GptCatBridge;
+    var target = event.target;
+
+    if (!target || !target.closest) return;
+    if (own(target)) return;
+    if (isEditingSurface(target)) return;
+
+    var anchor = linkFrom(target);
+    var href = anchor && anchor.href ? String(anchor.href) : '';
+    var actionable = downloadText(anchor) || downloadText(target);
+
+    if (!href) {
+      // 没有可直接使用的链接：交回站点自身处理，原生 DownloadListener 会兜底。
+      if (actionable) setDownloadChip('正在交给系统处理…', false);
+      return;
+    }
+
+    if (!/^(https?:|blob:|data:)/i.test(href)) return;
+
+    var marked = !!(anchor && anchor.hasAttribute && anchor.hasAttribute('download'));
+    var fileLike =
+      /\.(zip|7z|rar|pdf|doc|docx|xls|xlsx|ppt|pptx|csv|apk|png|jpg|jpeg|gif|webp|txt|md|json|mp3|wav|mp4)(\?|#|$)/i
+        .test(href);
+
+    if (!marked && !fileLike && !actionable) return;
+
+    var downloadName = fileNameFrom(anchor, href);
+
+    if (/^blob:|^data:/i.test(href)) {
+      event.preventDefault();
+      event.stopPropagation();
+      blobDownload(href, downloadName);
+      return;
+    }
+
+    if (!bridge || typeof bridge.downloadFile !== 'function') return;
 
     var id = '';
     try {
-      id = String(bridge.downloadFile(
-        bridgeToken,
-        target.href,
-        downloadName
-      ) || '');
+      id = String(bridge.downloadFile(bridgeToken, href, downloadName) || '');
     } catch (e) {
       id = '';
     }
@@ -902,12 +1606,25 @@
       return;
     }
 
-    if (!/^\d+$/.test(id)) return;
+    if (/^\d+$/.test(id)) {
+      event.preventDefault();
+      event.stopPropagation();
+      addTask({ id: id, name: downloadName, status: 'pending', percent: -1, downloaded: 0, total: -1 });
+      setDownloadChip('开始下载：' + downloadName, true);
 
-    event.preventDefault();
-    event.stopPropagation();
-    setDownloadChip('正在准备下载：' + downloadName, false);
-    trackDownload(id, downloadName);
+      var chip = downloadChip();
+      chip.onclick = function () {
+        openPanel('downloads');
+      };
+
+      hideDownloadChipLater(4000);
+      trackDownload(id, downloadName);
+      return;
+    }
+
+    // 直接入队失败：不拦截站点行为，让原生兜底并给出可见反馈。
+    setDownloadChip('正在交给系统处理：' + downloadName, false);
+    hideDownloadChipLater(4000);
   }, true);
 
 
@@ -1372,6 +2089,21 @@
     } catch (e) { }
   }
 
+  // 跟随系统时，系统切换深浅色要即时生效。
+  if (typeof window.matchMedia === 'function') {
+    var media = window.matchMedia('(prefers-color-scheme: dark)');
+    var onSchemeChange = function () {
+      if (themeMode() === 'auto') applyTheme(true);
+    };
+
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', onSchemeChange);
+    } else if (typeof media.addListener === 'function') {
+      media.addListener(onSchemeChange);
+    }
+  }
+
+  applyTheme(true);
   observe();
   refresh();
 })('__GC_BRIDGE_TOKEN__');

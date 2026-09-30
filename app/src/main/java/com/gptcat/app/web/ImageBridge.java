@@ -2,25 +2,24 @@ package com.gptcat.app.web;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Environment;
 import android.os.SystemClock;
 import android.util.Base64;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
-import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
 
 import com.gptcat.app.ImageViewerActivity;
+import com.gptcat.app.R;
+import com.gptcat.app.download.DownloadCenter;
 import com.gptcat.app.image.ImageFiles;
 import com.gptcat.app.notify.NotificationHelper;
+import com.gptcat.app.ui.ThemeController;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -32,11 +31,10 @@ import java.util.UUID;
  * WebView JS bridge：
  * - 图片打开/分块落盘；
  * - 非用户 focus 时隐藏输入法；
- * - 系统 DownloadManager 下载、查询进度、打开下载文件。
+ * - 下载任务（系统 DownloadManager + 网页生成文件）、缓存管理、深浅色切换。
  */
 public final class ImageBridge {
     private static final int REQUEST_STORAGE = 6102;
-    private static final String DOWNLOAD_PREFS = "gptcat_downloads";
 
     private final WeakReference<Activity> activityRef;
     private final Context context;
@@ -51,6 +49,14 @@ public final class ImageBridge {
     private long expectedBytes;
     private long receivedBytes;
     private long lastOpen;
+
+    private File fileTransferFile;
+    private FileOutputStream fileTransfer;
+    private String fileTransferId;
+    private String fileName;
+    private String fileMime;
+    private long fileExpected;
+    private long fileReceived;
 
     public ImageBridge(Activity activity, String token) {
         activityRef = new WeakReference<>(activity);
@@ -175,7 +181,7 @@ public final class ImageBridge {
     }
 
     /**
-     * 返回 DownloadManager ID；返回 "permission" 表示 Android 7-9 需要用户先授权存储。
+     * 返回任务 ID；返回 "permission" 表示 Android 7-9 需要用户先授权存储。
      * 返回空字符串表示未能创建下载。
      */
     @JavascriptInterface
@@ -196,44 +202,29 @@ public final class ImageBridge {
 
         activity.runOnUiThread(() -> NotificationHelper.requestPermissionIfNeeded(activity));
 
-        DownloadManager manager =
-                (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
-        if (manager == null) return "";
+        return DownloadCenter.enqueue(context, url, name, null);
+    }
 
-        String safeName = safeFileName(name);
+    /** 系统任务 + 网页生成文件的合并列表，供下载任务面板展示。 */
+    @JavascriptInterface
+    public synchronized String listDownloads(String value) {
+        if (!allowed(value)) return "[]";
 
-        try {
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-            request.setTitle(safeName);
-            request.setDescription("GPTCat 下载");
-            request.setNotificationVisibility(
-                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setAllowedOverMetered(true);
-            request.setAllowedOverRoaming(true);
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeName);
+        String system = DownloadCenter.list(context);
+        String local = DownloadCenter.listLocal();
+        if ("[]".equals(local)) return system;
+        if ("[]".equals(system)) return local;
 
-            String cookie = CookieManager.getInstance().getCookie(url);
-            if (cookie != null && !cookie.trim().isEmpty()) {
-                request.addRequestHeader("Cookie", cookie);
-            }
+        return "[" + system.substring(1, system.length() - 1)
+                + (system.length() > 2 ? "," : "")
+                + local.substring(1);
+    }
 
-            String userAgent = System.getProperty("http.agent");
-            if (userAgent != null && !userAgent.trim().isEmpty()) {
-                request.addRequestHeader("User-Agent", userAgent);
-            }
-
-            long id = manager.enqueue(request);
-
-            SharedPreferences prefs =
-                    context.getSharedPreferences(DOWNLOAD_PREFS, Context.MODE_PRIVATE);
-            prefs.edit()
-                    .putString("download." + id + ".name", safeName)
-                    .apply();
-
-            return Long.toString(id);
-        } catch (RuntimeException e) {
-            return "";
-        }
+    @JavascriptInterface
+    public synchronized boolean removeDownload(String value, String id) {
+        if (!allowed(value) || id == null) return false;
+        if (id.startsWith("local:")) return DownloadCenter.forgetLocal(id);
+        return DownloadCenter.remove(context, id);
     }
 
     /**
@@ -243,61 +234,32 @@ public final class ImageBridge {
     @JavascriptInterface
     public synchronized String getDownloadProgress(String value, String idValue) {
         if (!allowed(value)) return "unknown|-1|0|0";
-
-        long id = parseId(idValue);
-        if (id < 0) return "unknown|-1|0|0";
-
-        DownloadManager manager =
-                (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
-        if (manager == null) return "unknown|-1|0|0";
-
-        try (Cursor cursor = manager.query(new DownloadManager.Query().setFilterById(id))) {
-            if (cursor == null || !cursor.moveToFirst()) {
-                return "unknown|-1|0|0";
-            }
-
-            int status = intColumn(cursor, DownloadManager.COLUMN_STATUS, 0);
-            long downloaded = longColumn(
-                    cursor, DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR, 0L);
-            long total = longColumn(
-                    cursor, DownloadManager.COLUMN_TOTAL_SIZE_BYTES, -1L);
-
-            int percent = total > 0
-                    ? (int) Math.max(0L, Math.min(100L, downloaded * 100L / total))
-                    : -1;
-
-            return statusName(status)
-                    + "|" + percent
-                    + "|" + downloaded
-                    + "|" + total;
-        } catch (RuntimeException e) {
-            return "unknown|-1|0|0";
-        }
+        return DownloadCenter.statusOf(context, idValue);
     }
 
     @JavascriptInterface
     public synchronized boolean openDownloadedFile(String value, String idValue) {
-        if (!allowed(value)) return false;
+        if (!allowed(value) || idValue == null) return false;
 
-        long id = parseId(idValue);
-        if (id < 0) return false;
-
-        DownloadManager manager =
-                (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
         Activity activity = activityRef.get();
-        if (manager == null || activity == null) return false;
+        if (activity == null) return false;
 
-        Uri uri = manager.getUriForDownloadedFile(id);
+        final Uri uri;
+        final String mime;
+        if (idValue.startsWith("local:")) {
+            uri = DownloadCenter.localUriOf(idValue);
+            mime = "*/*";
+        } else {
+            uri = DownloadCenter.uriOf(context, idValue);
+            mime = DownloadCenter.mimeOf(context, idValue);
+        }
+
         if (uri == null) return false;
-
-        String mime = manager.getMimeTypeForDownloadedFile(id);
-        if (mime == null || mime.trim().isEmpty()) mime = "*/*";
-        final String finalMime = mime;
 
         activity.runOnUiThread(() -> {
             try {
                 Intent open = new Intent(Intent.ACTION_VIEW);
-                open.setDataAndType(uri, finalMime);
+                open.setDataAndType(uri, mime);
                 open.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 activity.startActivity(open);
             } catch (RuntimeException ignored) { }
@@ -305,57 +267,234 @@ public final class ImageBridge {
         return true;
     }
 
-    private static long parseId(String value) {
+    // ------------------------------------------------------- 网页内生成的文件（blob/data）
+
+    @JavascriptInterface
+    public synchronized String beginFile(String value, String name, String mime, long bytes) {
+        if (!allowed(value) || bytes <= 0 || bytes > DownloadCenter.maxTempBytes()) return "";
+        clearFileTransfer();
+
         try {
-            return Long.parseLong(value);
-        } catch (Exception e) {
-            return -1L;
+            fileTransferFile = DownloadCenter.createTemp(context);
+            fileTransfer = new FileOutputStream(fileTransferFile);
+            fileTransferId = UUID.randomUUID().toString();
+            fileExpected = bytes;
+            fileReceived = 0;
+            fileName = DownloadCenter.safeName(name, "");
+            fileMime = mime == null ? "" : mime;
+            return fileTransferId;
+        } catch (IOException e) {
+            clearFileTransfer();
+            return "";
         }
     }
 
-    private static int intColumn(Cursor cursor, String name, int fallback) {
-        int index = cursor.getColumnIndex(name);
-        return index >= 0 ? cursor.getInt(index) : fallback;
-    }
+    @JavascriptInterface
+    public synchronized boolean appendFile(String value, String id, String encoded) {
+        if (!allowed(value) || fileTransfer == null || !fileTransferId.equals(id)) return false;
 
-    private static long longColumn(Cursor cursor, String name, long fallback) {
-        int index = cursor.getColumnIndex(name);
-        return index >= 0 ? cursor.getLong(index) : fallback;
-    }
+        try {
+            if (encoded == null || encoded.length() > 65536) {
+                throw new IOException("无效文件分块");
+            }
 
-    private static String statusName(int status) {
-        switch (status) {
-            case DownloadManager.STATUS_PENDING:
-                return "pending";
-            case DownloadManager.STATUS_RUNNING:
-                return "running";
-            case DownloadManager.STATUS_PAUSED:
-                return "paused";
-            case DownloadManager.STATUS_SUCCESSFUL:
-                return "success";
-            case DownloadManager.STATUS_FAILED:
-                return "failed";
-            default:
-                return "unknown";
+            byte[] bytes = Base64.decode(encoded, Base64.DEFAULT);
+            if (bytes.length == 0 || fileReceived + bytes.length > fileExpected) {
+                throw new IOException("文件分块超过限制");
+            }
+
+            fileTransfer.write(bytes);
+            fileReceived += bytes.length;
+            return true;
+        } catch (IOException | IllegalArgumentException e) {
+            clearFileTransfer();
+            return false;
         }
     }
 
-    private static String safeFileName(String value) {
-        String name = value == null ? "" : value.trim();
-
-        // 去掉 URL 查询串残留和路径分隔符；保留中文等 Unicode 文件名。
-        int query = name.indexOf('?');
-        if (query >= 0) name = name.substring(0, query);
-
-        name = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_");
-        while (name.startsWith(".")) name = name.substring(1);
-
-        if (name.trim().isEmpty()) {
-            name = "gptcat-" + System.currentTimeMillis();
+    /** 完成后登记到系统「下载」目录并通知；返回本地任务 ID。 */
+    @JavascriptInterface
+    public synchronized String finishFile(String value, String id) {
+        if (!allowed(value) || fileTransfer == null || !fileTransferId.equals(id)) return "";
+        if (fileReceived != fileExpected) {
+            clearFileTransfer();
+            return "";
         }
 
-        if (name.length() > 120) name = name.substring(0, 120);
-        return name;
+        File ready = fileTransferFile;
+        String name = fileName;
+        String mime = fileMime;
+
+        try {
+            fileTransfer.close();
+        } catch (IOException ignored) { }
+
+        fileTransfer = null;
+        fileTransferFile = null;
+        fileTransferId = null;
+        fileReceived = 0;
+        fileExpected = 0;
+
+        try {
+            Uri uri = DownloadCenter.publish(context, ready, name, mime);
+            ready.delete();
+
+            String taskId = DownloadCenter.rememberLocal(name, uri, 0L);
+            notifySaved(name, uri, mime);
+            return taskId;
+        } catch (IOException e) {
+            ready.delete();
+            return "";
+        }
+    }
+
+    @JavascriptInterface
+    public synchronized void cancelFile(String value, String id) {
+        if (token.equals(value) && id != null && id.equals(fileTransferId)) {
+            clearFileTransfer();
+        }
+    }
+
+    private void notifySaved(String name, Uri uri, String mime) {
+        if (!NotificationHelper.canPost(context)) return;
+
+        Activity activity = activityRef.get();
+        Intent open = new Intent(Intent.ACTION_VIEW);
+        open.setDataAndType(uri, mime == null || mime.trim().isEmpty() ? "*/*" : mime);
+        open.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+        android.app.PendingIntent pending = android.app.PendingIntent.getActivity(
+                context,
+                6302,
+                open,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                        | android.app.PendingIntent.FLAG_IMMUTABLE);
+
+        android.app.NotificationManager manager =
+                (android.app.NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+
+        android.app.Notification notification = NotificationHelper
+                .builder(context, NotificationHelper.CHANNEL_DOWNLOADS)
+                .setContentTitle("下载完成：" + name)
+                .setContentText("已保存到 下载/" + DownloadCenter.SUBDIR)
+                .setContentIntent(pending)
+                .setCategory(android.app.Notification.CATEGORY_STATUS)
+                .build();
+
+        manager.notify(6302, notification);
+        if (activity == null) return;
+    }
+
+    // ------------------------------------------------------------- 缓存与主题
+
+    /** 返回 {"images":文件数,"imageBytes":字节,"webBytes":字节}。 */
+    @JavascriptInterface
+    public synchronized String cacheStats(String value) {
+        if (!allowed(value)) return "{\"images\":0,\"imageBytes\":0,\"webBytes\":0}";
+
+        String images = ImageFiles.stats(context);
+        String[] parts = images.split("\\|");
+        long web = directoryBytes(webCacheDir());
+
+        return "{\"images\":" + parts[0]
+                + ",\"imageBytes\":" + (parts.length > 1 ? parts[1] : "0")
+                + ",\"webBytes\":" + web + "}";
+    }
+
+    /** kind: images | web | all；返回 {"images":释放字节,"web":是否清理}。 */
+    @JavascriptInterface
+    public synchronized String clearCache(String value, String kind) {
+        if (!allowed(value) || kind == null) return "{\"images\":0,\"web\":false}";
+
+        long freed = 0;
+        boolean web = false;
+
+        if ("images".equals(kind) || "all".equals(kind)) {
+            freed += ImageFiles.clear(context);
+        }
+
+        if ("web".equals(kind) || "all".equals(kind)) {
+            web = clearWebCache();
+            freed += clearFileTemp();
+        }
+
+        return "{\"images\":" + freed + ",\"web\":" + web + "}";
+    }
+
+    /** mode: dark | light | auto；返回实际生效的 dark/light。 */
+    @JavascriptInterface
+    public synchronized String setTheme(String value, String mode) {
+        if (!allowed(value)) return "";
+
+        Activity activity = activityRef.get();
+        if (activity == null) return "";
+
+        ThemeController.setMode(context, mode);
+        boolean dark = ThemeController.isDark(context);
+
+        activity.runOnUiThread(() -> {
+            Activity current = activityRef.get();
+            if (current != null && !current.isFinishing() && !current.isDestroyed()) {
+                ThemeController.apply(current, dark);
+            }
+        });
+
+        return dark ? "dark" : "light";
+    }
+
+    private boolean clearWebCache() {
+        Activity activity = activityRef.get();
+        if (activity == null) return false;
+
+        activity.runOnUiThread(() -> {
+            View view = activity.findViewById(R.id.webView);
+            if (view instanceof WebView) {
+                // 只清缓存，不动 Cookie / 表单，避免把登录状态一起清掉。
+                ((WebView) view).clearCache(true);
+            }
+        });
+        return true;
+    }
+
+    private long clearFileTemp() {
+        return deleteChildren(new File(context.getCacheDir(), "gptcat-files"));
+    }
+
+    private File webCacheDir() {
+        return new File(context.getCacheDir(), "WebView");
+    }
+
+    private static long directoryBytes(File dir) {
+        if (dir == null || !dir.isDirectory()) return 0;
+
+        File[] files = dir.listFiles();
+        if (files == null) return 0;
+
+        long total = 0;
+        for (File file : files) {
+            total += file.isDirectory() ? directoryBytes(file) : Math.max(0L, file.length());
+        }
+        return total;
+    }
+
+    private static long deleteChildren(File dir) {
+        if (dir == null || !dir.isDirectory()) return 0;
+
+        File[] files = dir.listFiles();
+        if (files == null) return 0;
+
+        long freed = 0;
+        for (File file : files) {
+            if (file.isDirectory()) {
+                freed += deleteChildren(file);
+                file.delete();
+            } else {
+                long length = Math.max(0L, file.length());
+                if (file.delete()) freed += length;
+            }
+        }
+        return freed;
     }
 
     private boolean launch(String url, File file) {
@@ -392,6 +531,7 @@ public final class ImageBridge {
         closed = true;
         enabled = false;
         clearTransfer();
+        clearFileTransfer();
         activityRef.clear();
     }
 
@@ -409,5 +549,23 @@ public final class ImageBridge {
         transferId = null;
         receivedBytes = 0;
         expectedBytes = 0;
+    }
+
+    private void clearFileTransfer() {
+        if (fileTransfer != null) {
+            try {
+                fileTransfer.close();
+            } catch (IOException ignored) { }
+        }
+
+        if (fileTransferFile != null) fileTransferFile.delete();
+
+        fileTransfer = null;
+        fileTransferFile = null;
+        fileTransferId = null;
+        fileName = null;
+        fileMime = null;
+        fileReceived = 0;
+        fileExpected = 0;
     }
 }

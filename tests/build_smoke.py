@@ -53,7 +53,7 @@ elif name == 'zipalign': write(args[-1], Path(args[-2]).read_text())
         (jdk / 'bin' / name).symlink_to(dispatcher)
     for name in ('aapt2', 'zipalign'):
         (bt / name).symlink_to(dispatcher)
-    env = dict(os.environ, SDK=str(sdk), JDK=str(jdk))
+    env = dict(os.environ, SDK=str(sdk), JDK=str(jdk), BUILD_DIR=str(project / 'build'))
     env.pop('JAVA_TOOL_OPTIONS', None)
     for key in ('KEYSTORE', 'KEY_ALIAS', 'BUILD_TOOLS_VERSION', 'COMPILE_SDK', 'REGENERATE_ICONS'):
         env.pop(key, None)

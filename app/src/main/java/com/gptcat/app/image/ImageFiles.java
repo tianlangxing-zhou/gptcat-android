@@ -102,6 +102,39 @@ public final class ImageFiles {
         return files == null ? new File[0] : files;
     }
 
+    /** 返回 "文件数|字节数"；用于设置面板展示。 */
+    public static String stats(Context context) {
+        try {
+            File[] files = cacheFiles(directory(context));
+            long bytes = 0;
+            for (File file : files) {
+                bytes += Math.max(0L, file.length());
+            }
+            return files.length + "|" + bytes;
+        } catch (IOException e) {
+            return "0|0";
+        }
+    }
+
+    /** 清空图片缓存，返回释放的字节数。 */
+    public static long clear(Context context) {
+        long freed = 0;
+
+        try {
+            for (File file : cacheFiles(directory(context))) {
+                long length = Math.max(0L, file.length());
+                if (file.delete()) freed += length;
+            }
+        } catch (IOException ignored) { }
+
+        return freed;
+    }
+
+    /** 判断某个缓存文件名是否合法，供清理时过滤。 */
+    public static boolean isCacheName(String name) {
+        return name != null && CACHE_NAME.matcher(name).matches();
+    }
+
     public static long copy(InputStream input, OutputStream output) throws IOException {
         byte[] buffer = new byte[32 * 1024];
         long total = 0;
