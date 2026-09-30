@@ -33,6 +33,7 @@ public final class DownloadCenter {
     public static final String SUBDIR = "佐助";
 
     private static final String PREFS = "gptcat-downloads";
+    private static final String KEY_LOCAL = "localTasks";
     private static final long MAX_TEMP_BYTES = 512L * 1024 * 1024;
 
     private DownloadCenter() { }
@@ -208,19 +209,91 @@ public final class DownloadCenter {
     // ---------------------------------------------------------------- 网页内生成的文件
 
     private static final java.util.List<Object[]> LOCAL = new java.util.ArrayList<>();
+    private static boolean localLoaded = false;
+
+    /**
+     * 本地任务落盘后会写进 SharedPreferences。
+     * 只在内存里存是不够的：网页生成的 blob/data 文件下载完，进程一重启列表就空了，
+     * 而文件其实还在「下载/佐助」里 —— 用户会以为下载没成功。
+     */
+    private static void loadLocal(Context context) {
+        synchronized (LOCAL) {
+            if (localLoaded) return;
+            if (context == null) return;
+
+            localLoaded = true;
+
+            String raw;
+            try {
+                raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        .getString(KEY_LOCAL, "");
+            } catch (RuntimeException e) {
+                return;
+            }
+
+            if (raw == null || raw.isEmpty()) return;
+
+            try {
+                JSONArray array = new JSONArray(raw);
+                for (int i = 0; i < array.length() && LOCAL.size() < 20; i++) {
+                    JSONObject item = array.optJSONObject(i);
+                    if (item == null) continue;
+
+                    String id = item.optString("id", "");
+                    String name = item.optString("name", "");
+                    String uri = item.optString("uri", "");
+                    if (id.isEmpty() || uri.isEmpty()) continue;
+
+                    LOCAL.add(new Object[] {
+                            id, name, Uri.parse(uri),
+                            item.optLong("bytes", 0L), item.optLong("time", 0L) });
+                }
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private static void saveLocal(Context context) {
+        if (context == null) return;
+
+        JSONArray array = new JSONArray();
+        synchronized (LOCAL) {
+            for (Object[] entry : LOCAL) {
+                try {
+                    JSONObject item = new JSONObject();
+                    item.put("id", entry[0]);
+                    item.put("name", entry[1]);
+                    item.put("uri", String.valueOf(entry[2]));
+                    item.put("bytes", (Long) entry[3]);
+                    item.put("time", (Long) entry[4]);
+                    array.put(item);
+                } catch (Exception ignored) { }
+            }
+        }
+
+        try {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().putString(KEY_LOCAL, array.toString()).apply();
+        } catch (RuntimeException ignored) { }
+    }
 
     /** 登记一个已落盘的网页文件，返回带前缀的本地任务 ID。 */
-    public static String rememberLocal(String name, Uri uri, long bytes) {
+    public static String rememberLocal(Context context, String name, Uri uri, long bytes) {
         String id = "local:" + java.util.UUID.randomUUID();
+        loadLocal(context);
+
         synchronized (LOCAL) {
             LOCAL.add(0, new Object[] { id, name, uri, bytes, System.currentTimeMillis() });
             while (LOCAL.size() > 20) LOCAL.remove(LOCAL.size() - 1);
         }
+
+        saveLocal(context);
         return id;
     }
 
     /** 本地任务列表，字段与系统任务保持一致，另外多一个 uri。 */
-    public static String listLocal() {
+    public static String listLocal(Context context) {
+        loadLocal(context);
+
         JSONArray array = new JSONArray();
         synchronized (LOCAL) {
             for (Object[] entry : LOCAL) {
@@ -240,7 +313,9 @@ public final class DownloadCenter {
         return array.toString();
     }
 
-    public static Uri localUriOf(String id) {
+    public static Uri localUriOf(Context context, String id) {
+        loadLocal(context);
+
         synchronized (LOCAL) {
             for (Object[] entry : LOCAL) {
                 if (entry[0].equals(id)) return (Uri) entry[2];
@@ -249,16 +324,22 @@ public final class DownloadCenter {
         return null;
     }
 
-    public static boolean forgetLocal(String id) {
+    public static boolean forgetLocal(Context context, String id) {
+        loadLocal(context);
+
+        boolean removed = false;
         synchronized (LOCAL) {
             for (int i = 0; i < LOCAL.size(); i++) {
                 if (LOCAL.get(i)[0].equals(id)) {
                     LOCAL.remove(i);
-                    return true;
+                    removed = true;
+                    break;
                 }
             }
         }
-        return false;
+
+        if (removed) saveLocal(context);
+        return removed;
     }
 
     public static File createTemp(Context context) throws IOException {

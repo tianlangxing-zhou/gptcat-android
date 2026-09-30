@@ -210,7 +210,7 @@ public final class ImageBridge {
         if (!allowed(value)) return "[]";
 
         String system = DownloadCenter.list(context);
-        String local = DownloadCenter.listLocal();
+        String local = DownloadCenter.listLocal(context);
         if ("[]".equals(local)) return system;
         if ("[]".equals(system)) return local;
 
@@ -222,7 +222,7 @@ public final class ImageBridge {
     @JavascriptInterface
     public synchronized boolean removeDownload(String value, String id) {
         if (!allowed(value) || id == null) return false;
-        if (id.startsWith("local:")) return DownloadCenter.forgetLocal(id);
+        if (id.startsWith("local:")) return DownloadCenter.forgetLocal(context, id);
         return DownloadCenter.remove(context, id);
     }
 
@@ -246,7 +246,7 @@ public final class ImageBridge {
         final Uri uri;
         final String mime;
         if (idValue.startsWith("local:")) {
-            uri = DownloadCenter.localUriOf(idValue);
+            uri = DownloadCenter.localUriOf(context, idValue);
             mime = "*/*";
         } else {
             uri = DownloadCenter.uriOf(context, idValue);
@@ -338,7 +338,7 @@ public final class ImageBridge {
             Uri uri = DownloadCenter.publish(context, ready, name, mime);
             ready.delete();
 
-            String taskId = DownloadCenter.rememberLocal(name, uri, 0L);
+            String taskId = DownloadCenter.rememberLocal(context, name, uri, 0L);
             notifySaved(name, uri, mime);
             return taskId;
         } catch (IOException e) {
