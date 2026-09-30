@@ -136,12 +136,13 @@ async function settle(predicate) {
 
 test('idle page has no periodic scans and injection is idempotent', () => {
   const env = environment(); env.add('button', '深度研究'); env.run();
-  assert.equal(env.state.queries, 1);
+  const firstPass = env.state.queries;
+  assert.ok(firstPass > 0, '首次注入应至少扫描一次');
   env.advance(60000);
-  assert.equal(env.state.queries, 1);
+  assert.equal(env.state.queries, firstPass, '空闲时不得有周期性扫描');
   env.run();
-  assert.equal(env.state.queries, 1);
-  assert.equal(env.state.observers.length, 1);
+  assert.equal(env.state.queries, firstPass, '重复注入不得再扫描');
+  assert.equal(env.state.observers.length, 1, '只应注册一个 MutationObserver');
 });
 
 test('shortcut targets page content once and disappears when page content is removed', () => {
@@ -155,25 +156,53 @@ test('shortcut targets page content once and disappears when page content is rem
   assert.equal(menu.style.display, 'none');
 });
 
+// 每次刷新的 DOM 查询量随功能增加会变，测试只约束"刷新次数"，不锁死单次代价。
+function perRefreshCost(env) {
+  const before = env.state.queries;
+  env.mutate();
+  env.advance(1000);
+  const cost = env.state.queries - before;
+  assert.ok(cost > 0, '内容变动后应发生一次扫描');
+  assert.ok(cost <= 8, `单次刷新查询量应受控，实际 ${cost}`);
+  return cost;
+}
+
 test('SPA mutation bursts coalesce and own UI mutations do not rescan', () => {
   const env = environment(); const card = env.add('button', '深度研究'); env.run();
+  const cost = perRefreshCost(env);
+  const settled = env.state.queries;
   for (let i = 0; i < 1000; i++) env.mutate(card, 'characterData');
-  assert.equal(env.state.timers.size, 1); env.advance(1000);
-  assert.equal(env.state.queries, 2);
+  assert.equal(env.state.timers.size, 1);
+  env.advance(1000);
+  assert.equal(env.state.queries, settled + cost, '1000 次变动只允许合并成一次刷新');
   env.mutate(env.document.getElementById('gcMenu'), 'attributes');
-  env.advance(1000); assert.equal(env.state.queries, 2);
+  env.advance(1000); assert.equal(env.state.queries, settled + cost, '自家 UI 变动不得触发刷新');
 });
 
 test('hidden pages suspend scanning and BFCache-style pageshow resumes it', () => {
-  const env = environment(); env.run(); const initial = env.state.queries;
+  const env = environment(); env.run();
+  const cost = perRefreshCost(env);
+  const visible = env.state.queries;
   env.document.hidden = true; env.document.dispatchEvent(new env.Event('visibilitychange'));
-  env.mutate(); env.advance(5000); assert.equal(env.state.queries, initial);
+  env.mutate(); env.advance(5000); assert.equal(env.state.queries, visible, '后台页面不得扫描');
   env.document.hidden = false; env.document.dispatchEvent(new env.Event('visibilitychange'));
-  env.advance(1000); assert.equal(env.state.queries, initial + 1);
+  env.advance(1000); assert.equal(env.state.queries, visible + cost, '回到前台应恢复一次刷新');
+  const resumed = env.state.queries;
   env.window.dispatchEvent(new env.Event('pagehide')); env.mutate(); env.advance(5000);
-  assert.equal(env.state.queries, initial + 1);
+  assert.equal(env.state.queries, resumed, 'pagehide 后不得扫描');
   env.window.dispatchEvent(new env.Event('pageshow')); env.advance(1000);
-  assert.equal(env.state.queries, initial + 2);
+  assert.equal(env.state.queries, resumed + cost, 'pageshow 应恢复刷新');
+});
+
+test('editing surfaces never trigger image preview even when they contain an image', () => {
+  const env = environment(); let calls = 0;
+  env.window.GptCatBridge = {openImage() { calls++; return true; }};
+  const composer = env.add('form', '');
+  const inside = Object.assign(new env.Element('img'), {src: 'https://cdn.example/composer.png', naturalWidth: 800});
+  composer.appendChild(inside);
+  env.run();
+  assert.equal(env.imageClick(inside).prevented, undefined, '输入区内的图片点击应保留站点原行为');
+  assert.equal(calls, 0, '输入区（composer/form）内的图片不得进入预览');
 });
 
 test('hidden targets are excluded; model name alone does not create a shortcut', () => {

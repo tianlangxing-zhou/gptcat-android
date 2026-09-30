@@ -10,6 +10,8 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="#FFFFFF"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
         android:overScrollMode="ifContentScrolls"
         android:scrollbarStyle="insideOverlay" />
 
@@ -20,10 +22,10 @@
         android:layout_height="2dp"
         android:layout_gravity="top"
         android:max="100"
-        android:minHeight="2dp"
         android:maxHeight="2dp"
+        android:minHeight="2dp"
+        android:progressTint="#1F6FEB"
         android:splitTrack="false"
-        android:visibility="gone"
-        android:progressTint="#1F6FEB" />
+        android:visibility="gone" />
 
 </FrameLayout>

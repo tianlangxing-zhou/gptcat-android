@@ -11,6 +11,7 @@ import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 
 import com.gptcat.app.ui.WindowInsetsHelper;
+import com.gptcat.app.update.UpdateChecker;
 import com.gptcat.app.web.BrowserController;
 import com.gptcat.app.web.FileChooserHandler;
 
@@ -32,6 +33,9 @@ public class MainActivity extends Activity {
         ProgressBar progress = findViewById(R.id.progressBar);
         browser = new BrowserController(this, root, progress, fileChooser);
         browser.restoreOrLoad(savedInstanceState);
+
+        // 后台线程轻量检查；最多每 12 小时一次，不阻塞首屏。
+        UpdateChecker.check(this);
     }
 
     @Override
