@@ -570,15 +570,32 @@
 
   // 第八轮：输入区/文本选择专用保护。
   // 即使 composer 或输入框容器本身带背景图，也不能因为选择文字而触发图片预览。
+  //
+  // 第九轮修正（真机探针定位）：类名启发式不能只看“子串命中”。
+  // 站点用 Tailwind 任意值类名承载输入区高度，例如
+  //   flex flex-col text-sm keyboard-open:pb-[calc(var(--composer-height,100px))]
+  // 这个类名里含 "composer" 子串，于是 [class*="composer"] 把**消息滚动区**
+  // 误判成输入区 → 内容区里 AI 生成图的第一下点击被 isEditingSurface 直接吞掉。
+  // （用户上传的裸 <img> 不在该容器里，所以没受影响 —— 这正是“上传图能点开、
+  //  生成图点不开”的原因。）
+  // 现在：强证据（真的可编辑元素/表单）直接成立；类名启发式必须同时满足
+  // “容器内部确实存在可编辑元素”，纯布局容器一律放行。
+  var EDITING_STRONG_SELECTOR =
+    'input,textarea,select,option,[contenteditable="true"],[role="textbox"]';
+  var EDITING_WEAK_SELECTOR =
+    '[data-testid*="composer"],[data-testid*="chat-input"],[data-testid*="prompt"],'
+    + '[class*="composer"],[class*="chat-input"],[class*="prompt"],'
+    + '[class*="input-area"],[class*="input-container"]';
+
   function isEditingSurface(node) {
     if (!node || !node.closest) return false;
+    if (node.closest('form')) return true;
+    if (node.closest(EDITING_STRONG_SELECTOR)) return true;
 
-    return !!node.closest(
-      'input,textarea,select,option,[contenteditable="true"],[role="textbox"],'
-      + 'form,[data-testid*="composer"],[data-testid*="chat-input"],'
-      + '[data-testid*="prompt"],[class*="composer"],[class*="chat-input"],'
-      + '[class*="prompt"],[class*="input-area"],[class*="input-container"]'
-    );
+    var weak = node.closest(EDITING_WEAK_SELECTOR);
+    if (!weak) return false;
+
+    return !!(weak.querySelector && weak.querySelector(EDITING_STRONG_SELECTOR));
   }
 
   function hasActiveTextSelection() {
@@ -1449,13 +1466,22 @@
 
     if (isEditingSurface(image)) return;
 
+    // 永远不能触发预览：自家 UI、头像，以及模型选择器/菜单这类真正的交互控件。
     if (image.closest(
-      '[data-gc-ui],[class*="avatar"],button,a,[role="button"],'
+      '[data-gc-ui],[class*="avatar"],'
       + '[role="menuitem"],[role="option"],[data-testid*="model"]'
     )) return;
 
     var rect = image.getBoundingClientRect();
     if (image.naturalWidth < 200 && rect.width < 160) return;
+
+    // 站点常把「AI 生成图」包在 <a>/<button> 里，让它自己的灯箱先吃掉点击，
+    // 而「用户上传的图」通常是裸 <img>。以前这里把 a/button 一律排除，
+    // 结果生成图点一下进不了我们的预览（站点灯箱抢走了第一次点击）。
+    // 现在只有"确实点在这张大图本身"才绕过容器规则：目标必须是 img 且屏上尺寸够大，
+    // 这样工具栏图标、头像、按钮里的小图仍然让路给站点。
+    if (image.closest('button,a,[role="button"]')
+        && (target !== image || rect.width < 120 || rect.height < 120)) return;
 
     var source = image.currentSrc || image.src;
     if (!source || imageBusy) return;
@@ -1868,4 +1894,5 @@
 
   observe();
   refresh();
+
 })('__GC_BRIDGE_TOKEN__');

@@ -13,3 +13,6 @@
 
 # tests/build_smoke.py smoke fixture
 /tests/gptcat build test */
+
+# 本地临时脚本目录
+/_scratch/

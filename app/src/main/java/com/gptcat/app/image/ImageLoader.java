@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory;
 import android.webkit.CookieManager;
 
 import com.gptcat.app.web.UrlPolicy;
+import com.gptcat.app.web.UserAgent;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -116,8 +117,9 @@ public final class ImageLoader {
                 current.setReadTimeout(15000);
                 current.setRequestProperty("Accept", "image/*,*/*;q=0.8");
 
-                String userAgent = System.getProperty("http.agent");
-                if (userAgent != null && !userAgent.isEmpty()) {
+                // 与 WebView 保持同一个 UA：站点 Cookie（如 cf_clearance）可能绑定 UA。
+                String userAgent = UserAgent.current();
+                if (!userAgent.isEmpty()) {
                     current.setRequestProperty("User-Agent", userAgent);
                 }
 

@@ -60,6 +60,8 @@ public final class BrowserController {
     private WebView webView;
     private ImageBridge bridge;
     private ConnectivityManager.NetworkCallback networkCallback;
+    private BackStateListener backStateListener;
+    private boolean backAvailable;
 
     private String lastUrl = UrlPolicy.HOME_URL;
     private boolean errorPage;
@@ -124,6 +126,9 @@ public final class BrowserController {
         settings.setAllowFileAccess(false);
         settings.setAllowFileAccessFromFileURLs(false);
         settings.setAllowUniversalAccessFromFileURLs(false);
+
+        // 原生下载/图片请求要跟 WebView 用同一个 UA，必须在 UI 线程取。
+        UserAgent.warmUp(settings.getUserAgentString());
 
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
@@ -197,6 +202,29 @@ public final class BrowserController {
             return true;
         }
         return false;
+    }
+
+    /** 网页历史能否后退。用来决定要不要抢占系统返回键。 */
+    public interface BackStateListener {
+        void onBackAvailableChanged(boolean available);
+    }
+
+    /**
+     * 只在"能后退"时抢占返回键：抢占了系统的预测性返回动画就不会出现，
+     * 根页面应当把返回交回系统处理（系统默认是退到后台，能保住 WebView 会话）。
+     */
+    public void setBackStateListener(BackStateListener listener) {
+        backStateListener = listener;
+        updateBackState(true);
+    }
+
+    private void updateBackState(boolean force) {
+        WebView view = webView;
+        boolean available = view != null && !destroyed && view.canGoBack();
+        if (!force && available == backAvailable) return;
+
+        backAvailable = available;
+        if (backStateListener != null) backStateListener.onBackAvailableChanged(available);
     }
 
     /**
@@ -554,6 +582,8 @@ public final class BrowserController {
         public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
             if (view != webView || destroyed) return;
 
+            updateBackState(false);
+
             if (UrlPolicy.isTrusted(url)) {
                 lastUrl = url;
 
@@ -568,6 +598,7 @@ public final class BrowserController {
 
             progress.setVisibility(View.GONE);
             inject(view, url); // onPageCommitVisible 未触发时的兼容兜底。
+            updateBackState(false);
         }
 
         @Override

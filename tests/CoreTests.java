@@ -2,12 +2,18 @@ import com.gptcat.app.download.FileNamePolicy;
 import com.gptcat.app.image.ImageSizing;
 import com.gptcat.app.web.UrlPolicy;
 
+import java.nio.charset.StandardCharsets;
+
 /** 不依赖 Android SDK 的边界回归测试。运行方法见 README.md。 */
 public final class CoreTests {
     private static int checks;
     private static void check(boolean condition, String message) {
         checks++;
         if (!condition) throw new AssertionError(message);
+    }
+
+    private static int utf8(String value) {
+        return value.getBytes(StandardCharsets.UTF_8).length;
     }
 
     public static void main(String[] args) {
@@ -24,11 +30,34 @@ public final class CoreTests {
         check(UrlPolicy.isHttpUrl("http://cdn.example.com/a.jpg"), "external browser may parse HTTP");
         check(!UrlPolicy.isHttpUrl("content://test/a"), "reject content input");
         check(!UrlPolicy.isHttpUrl("https://cdn.example.com/" + new String(new char[8192])), "URL size bound");
+
         check("gptcat-download".equals(FileNamePolicy.safeName("..", "")), "dot-dot filename fallback");
         check("__secret.txt".equals(FileNamePolicy.safeName("..secret.txt", "")), "leading dots neutralized");
         check("a_b_c_.txt".equals(FileNamePolicy.safeName("a/b\\c?.txt", "")), "path separators sanitized");
         check("report.pdf".equals(FileNamePolicy.safeName("", "https://example.com/a/report.pdf?q=1")),
                 "filename from URL path");
+        check("invoice_gpj.apk".equals(FileNamePolicy.safeName("invoice\u202Egpj.apk", "")),
+                "bidi override neutralized");
+        check("a_.txt".equals(FileNamePolicy.safeName("a\uD83D.txt", "")), "lone surrogate replaced");
+
+        StringBuilder cjk = new StringBuilder();
+        for (int i = 0; i < 150; i++) cjk.append('\u6587');
+        String cjkName = FileNamePolicy.safeName(cjk + ".pdf", "");
+        check(cjkName.endsWith(".pdf"), "long CJK name keeps extension");
+        check(utf8(cjkName) <= 200, "long CJK name within 200 UTF-8 bytes");
+
+        StringBuilder emoji = new StringBuilder();
+        for (int i = 0; i < 100; i++) emoji.append("\uD83D\uDE00");
+        String emojiName = FileNamePolicy.safeName(emoji + ".png", "");
+        check(emojiName.endsWith(".png"), "long emoji name keeps extension");
+        check(utf8(emojiName) <= 200, "long emoji name within byte limit");
+        check(new String(emojiName.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8)
+                .equals(emojiName), "surrogate pairs not split");
+
+        StringBuilder ascii = new StringBuilder();
+        for (int i = 0; i < 300; i++) ascii.append('a');
+        check(FileNamePolicy.safeName(ascii.toString(), "").length() == 200, "ASCII name truncated to 200");
+
         check(ImageSizing.sampleSize(100, 100, 1080, 1920) == 1, "small image unchanged");
         check(ImageSizing.sampleSize(8000, 8000, 1080, 1920) == 4, "64 MP image samples to 4 MP");
         int[] dimensions = { 1, 24, 200, 1000, 2048, 4096, 8000, 50000, Integer.MAX_VALUE };
@@ -42,6 +71,6 @@ public final class CoreTests {
                 check(w <= 4096 && h <= 4096, "preview dimension limit");
             }
         }
-        System.out.println("PASS: " + checks + " URL and image sizing assertions");
+        System.out.println("PASS: " + checks + " URL, filename and image sizing assertions");
     }
 }

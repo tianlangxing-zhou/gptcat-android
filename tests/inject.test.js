@@ -303,6 +303,86 @@ test('image clicks retain site behavior without a bridge and when native rejects
   assert.equal(env.imageClick(img).prevented, true); assert.equal(calls, 1);
 });
 
+test('generated images wrapped in a clickable container open our preview on the first tap', () => {
+  const env = environment(); const opened = [];
+  env.window.GptCatBridge = {openImage(token, url) { opened.push(url); return true; }};
+
+  // 用户上传的图片：裸 <img> 直接放在消息里。
+  const uploaded = env.add('img', '', {src: 'https://cdn.example/uploaded.png', naturalWidth: 1024});
+  uploaded.rect = {width: 320, height: 240, top: 100, left: 20, right: 340, bottom: 340};
+
+  // AI 生成的图片：站点把整张图包在可点击容器里（真实站点就是这样做的）。
+  // 旧版把 a/button 一律排除，于是点击被站点自己的灯箱吃掉，我们的预览永远进不去。
+  const wrapper = env.add('button', '');
+  const generated = wrapper.appendChild(Object.assign(new env.Element('img'),
+    {src: 'https://cdn.example/generated.png', naturalWidth: 2048}));
+  generated.rect = {width: 327, height: 184, top: 400, left: 20, right: 347, bottom: 584};
+
+  env.run();
+
+  assert.equal(env.imageClick(uploaded).prevented, true, '上传的图片应一次点开预览');
+  assert.equal(env.imageClick(generated).prevented, true, '生成的图片应一次点开预览');
+  assert.deepEqual(opened, ['https://cdn.example/uploaded.png', 'https://cdn.example/generated.png']);
+});
+
+test('small icons and avatars inside clickable containers never open the preview', () => {
+  const env = environment(); let calls = 0;
+  env.window.GptCatBridge = {openImage() { calls++; return true; }};
+
+  const bar = env.add('div', '');
+
+  // 工具栏图标：包在 <button> 里、原图很大但屏上很小 —— 必须让路给站点。
+  const button = bar.appendChild(new env.Element('button', ''));
+  const icon = button.appendChild(Object.assign(new env.Element('img'),
+    {src: 'https://cdn.example/toolbar.png', naturalWidth: 512}));
+  icon.rect = {width: 24, height: 24, top: 10, left: 10, right: 34, bottom: 34};
+
+  // 头像：即使屏上很大也不能进预览。
+  const avatar = bar.appendChild(Object.assign(new env.Element('img'),
+    {src: 'https://cdn.example/avatar.png', naturalWidth: 512}));
+  avatar.setAttribute('class', 'avatar');
+  avatar.rect = {width: 200, height: 200, top: 10, left: 10, right: 210, bottom: 210};
+
+  env.run();
+
+  assert.equal(env.imageClick(icon).prevented, undefined, '按钮里的小图标不得进入预览');
+  assert.equal(env.imageClick(avatar).prevented, undefined, '头像不得进入预览');
+  assert.equal(calls, 0);
+});
+
+test('composer-like layout classes (Tailwind var names) do not swallow image taps', () => {
+  const env = environment(); const opened = [];
+  env.window.GptCatBridge = {openImage(token, url) { opened.push(url); return true; }};
+
+  // 真机探针实测：内容区滚动容器带 Tailwind 任意值类名，类名里含 "composer" 子串
+  // （keyboard-open:pb-[calc(var(--composer-height,100px))]）。
+  // 旧版 [class*="composer"] 只看子串，把它误判成输入区，
+  // 于是 AI 生成图的第一下点击被 isEditingSurface 直接吞掉。
+  const scroll = env.add('div', '');
+  scroll.setAttribute('class',
+    'flex flex-col text-sm keyboard-open:pb-[calc(var(--composer-height,100px))]');
+  const generated = scroll.appendChild(Object.assign(new env.Element('img'),
+    {src: 'https://share.example/estuary/content?id=file_0', naturalWidth: 1448}));
+  generated.rect = {width: 365, height: 273, top: 423, left: 0, right: 365, bottom: 696};
+
+  // 真正的输入区：容器内部确实有 contenteditable，必须继续拦下图片点击。
+  const composer = env.add('div', '');
+  composer.setAttribute('class', 'composer');
+  const editor = composer.appendChild(new env.Element('div', ''));
+  editor.setAttribute('contenteditable', 'true');
+  const background = composer.appendChild(Object.assign(new env.Element('img'),
+    {src: 'https://cdn.example/composer-bg.png', naturalWidth: 800}));
+  background.rect = {width: 400, height: 300, top: 100, left: 0, right: 400, bottom: 400};
+
+  env.run();
+
+  assert.equal(env.imageClick(generated).prevented, true,
+    '类名含 composer 子串的纯布局容器必须放行图片点击');
+  assert.deepEqual(opened, ['https://share.example/estuary/content?id=file_0']);
+  assert.equal(env.imageClick(background).prevented, undefined,
+    '真正含可编辑元素的输入区仍必须拦下图片点击');
+});
+
 test('blob image transfer preserves bytes and bounds each bridge chunk to 64 KiB', async () => {
   const env = environment(); const input = Buffer.alloc(160000);
   for (let i = 0; i < input.length; i++) input[i] = i % 251;

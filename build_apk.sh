@@ -20,11 +20,17 @@ BT="$SDK/build-tools/$BUILD_TOOLS_VERSION"
 PLATFORM="$SDK/platforms/android-$COMPILE_SDK/android.jar"
 KEYSTORE="${KEYSTORE:-$SRC/gptcat.keystore}"
 KEY_ALIAS="${KEY_ALIAS:-gptcat}"
-# 默认兼容现有私钥；可由环境变量覆盖，签名密码不出现在进程命令参数中。
-export GPTCAT_STORE_PASSWORD="${GPTCAT_STORE_PASSWORD:-gptcat123}"
+# 签名口令不再内置默认值：老默认口令已随源码公开，等于没有保护。
+# 只从环境变量读取，且不进入进程命令行参数（apksigner 用 env: 引用）。
+GPTCAT_STORE_PASSWORD="${GPTCAT_STORE_PASSWORD:-}"
+export GPTCAT_STORE_PASSWORD
 export GPTCAT_KEY_PASSWORD="${GPTCAT_KEY_PASSWORD:-$GPTCAT_STORE_PASSWORD}"
 
 fail() { echo "错误：$*" >&2; exit 1; }
+
+# 口令缺失要在编译之前就说清楚，而不是等 keytool 报一堆英文错误。
+[[ -n "${GPTCAT_STORE_PASSWORD:-}" ]] || fail "未设置 GPTCAT_STORE_PASSWORD；签名口令不再有默认值，请先 export"
+[[ -n "${GPTCAT_KEY_PASSWORD:-}" ]] || fail "未设置 GPTCAT_KEY_PASSWORD"
 resolve_tool() {
   local candidate="$1"
   if [[ -x "$candidate" ]]; then echo "$candidate";

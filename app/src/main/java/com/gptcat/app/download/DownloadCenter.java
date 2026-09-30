@@ -13,6 +13,7 @@ import android.provider.MediaStore;
 import android.webkit.CookieManager;
 
 import com.gptcat.app.web.UrlPolicy;
+import com.gptcat.app.web.UserAgent;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -68,13 +69,19 @@ public final class DownloadCenter {
                 request.setMimeType(safeMime(mime));
             }
 
-            String cookie = CookieManager.getInstance().getCookie(url);
-            if (cookie != null && !cookie.trim().isEmpty()) {
-                request.addRequestHeader("Cookie", cookie);
+            // Cookie 只发给站点自己的主机：DownloadManager 可能跟随重定向，
+            // 把站点凭据带到别的域上有风险，而外站 CDN 本来也不需要它。
+            if (UrlPolicy.isTrusted(url)) {
+                String cookie = CookieManager.getInstance().getCookie(url);
+                if (cookie != null && !cookie.trim().isEmpty()) {
+                    request.addRequestHeader("Cookie", cookie);
+                }
             }
 
-            String agent = System.getProperty("http.agent");
-            if (agent != null && !agent.trim().isEmpty()) {
+            // 用 WebView 的 UA，而不是 Dalvik 的 System.getProperty("http.agent")：
+            // 站点 Cookie（如 cf_clearance）可能绑定 UA，UA 不一致会被判成换客户端而拒绝下载。
+            String agent = UserAgent.current();
+            if (!agent.trim().isEmpty()) {
                 request.addRequestHeader("User-Agent", agent);
             }
 
@@ -513,6 +520,16 @@ public final class DownloadCenter {
 
     private static SharedPreferences prefs(Context context) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    /** 与 DownloadCompleteReceiver 共用同一个 prefs 文件（历史上两边名字不一致）。 */
+    public static SharedPreferences sharedPrefs(Context context) {
+        return prefs(context);
+    }
+
+    /** 与 DownloadCompleteReceiver 共用同一个键格式。 */
+    public static String nameKey(long id) {
+        return key(id);
     }
 
     private static String key(long id) {

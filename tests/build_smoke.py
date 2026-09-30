@@ -55,7 +55,8 @@ elif name == 'zipalign': write(args[-1], Path(args[-2]).read_text())
         (jdk / 'bin' / name).symlink_to(dispatcher)
     for name in ('aapt2', 'zipalign'):
         (bt / name).symlink_to(dispatcher)
-    env = dict(os.environ, SDK=str(sdk), JDK=str(jdk), BUILD_DIR=str(project / 'build'))
+    env = dict(os.environ, SDK=str(sdk), JDK=str(jdk), BUILD_DIR=str(project / 'build'),
+               GPTCAT_STORE_PASSWORD='fixture-password')
     env.pop('JAVA_TOOL_OPTIONS', None)
     for key in ('KEYSTORE', 'KEY_ALIAS', 'BUILD_TOOLS_VERSION', 'COMPILE_SDK', 'REGENERATE_ICONS'):
         env.pop(key, None)
@@ -76,6 +77,13 @@ elif name == 'zipalign': write(args[-1], Path(args[-2]).read_text())
     result = subprocess.run(['bash', str(project / 'build_apk.sh')], cwd=base,
                             env=dict(env, SDK=str(base / 'missing-sdk')), capture_output=True, text=True)
     assert result.returncode != 0 and marker.exists(), 'preflight must run before deleting build'
+    # 签名口令不再有内置默认值：不给口令必须在动编译之前就失败。
+    without_password = {key: value for key, value in env.items()
+                        if key != 'GPTCAT_STORE_PASSWORD'}
+    result = subprocess.run(['bash', str(project / 'build_apk.sh')], cwd=base,
+                            env=without_password, capture_output=True, text=True)
+    assert result.returncode != 0, 'missing signing password must fail fast'
+    assert 'GPTCAT_STORE_PASSWORD' in result.stderr, result.stderr
 finally:
     # 逐文件清理：整体 rmtree 会触发沙箱的批量删除保护（>50 文件）
     for entry in sorted(Path(scratch).rglob('*'), key=lambda p: len(p.parts), reverse=True):
@@ -84,4 +92,4 @@ finally:
         elif entry.is_dir():
             entry.rmdir()
     Path(scratch).rmdir()
-print('PASS: build paths with spaces, nested sources, signing failure and preflight guards (mock tools)')
+print('PASS: build paths with spaces, nested sources, signing failure, missing password and preflight guards (mock tools)')

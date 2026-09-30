@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.10
+- Fixed the light/dark regression from 1.0.9: `Theme.Material.NoActionBar` made targetSdk ≥ 33 WebViews report `prefers-color-scheme: dark`, so the site rendered in dark and the launch window flashed dark. Now uses a light theme plus a forced `UI_MODE_NIGHT_NO` in `attachBaseContext`. The image viewer stays dark on purpose.
+- Consumed window insets in `WindowInsetsHelper` so the safe area is no longer applied twice (root padding + CSS `env(safe-area-inset-*)`).
+- Back key now only intercepts when the page can actually go back; the root page is handed to the system (move to background) instead of `finish()`, preserving the WebView session. Same semantics on API 24–32.
+- Added `smallestScreenSize|screenLayout` (and `keyboard|navigation`) to `configChanges` so split-screen/foldable size changes no longer recreate the Activity and drop in-progress input.
+- Download filenames are truncated to 200 UTF-8 bytes with the extension preserved, split on code points (never through a surrogate pair), and stripped of bidi controls such as `U+202E` plus lone surrogates.
+- `GallerySaver` converts MediaStore `RuntimeException`s into `IOException` so callers can't get stuck in the "saving" state.
+- `DownloadCompleteReceiver` no longer posts notifications: user-initiated cancels/deletes also fire `DOWNLOAD_COMPLETE`, which used to be reported as a failure, and the system already shows a completion notification. It now only clears bookkeeping, and shares the same prefs file/key format as `DownloadCenter` (they had drifted apart, so the receiver had never actually fired).
+- Native download/image requests use the WebView user agent instead of Dalvik's `System.getProperty("http.agent")`; cookies are attached only for trusted site hosts so redirects can't leak them to other domains.
+- Signing passwords no longer have built-in defaults (the old one shipped in public source); `GPTCAT_STORE_PASSWORD` is required and validated before compilation.
+- AI-generated images now open the preview on the first tap: the site wraps them in a container whose Tailwind arbitrary-value class name contains `composer` (`keyboard-open:pb-[calc(var(--composer-height,100px))]`), which the `[class*="composer"]` substring test mistook for an editing surface and swallowed the click.
+
 ## 1.0.9
 - Target/compile Android API 36.
 - Added predictive-back support on Android 13+.

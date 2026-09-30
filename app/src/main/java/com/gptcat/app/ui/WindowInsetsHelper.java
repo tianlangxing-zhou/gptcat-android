@@ -32,7 +32,10 @@ public final class WindowInsetsHelper {
                         || view.getPaddingRight() != bars.right || view.getPaddingBottom() != bottom) {
                     view.setPadding(bars.left, bars.top, bars.right, bottom);
                 }
-                return insets;
+                // 必须消费掉：系统栏的留白已经由这里的 padding 让出来了，
+                // 再把 insets 传下去，WebView 会把同一段留白映射到 CSS 的
+                // env(safe-area-inset-*)，页面自己再垫一次 = 双重留白。
+                return WindowInsets.CONSUMED;
             });
             root.requestApplyInsets();
         } else {
