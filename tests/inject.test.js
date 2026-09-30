@@ -63,6 +63,7 @@ function environment() {
     getBoundingClientRect() { return this.rect; }
     matches(selector) {
       const part = selector.trim();
+      if (part === '*') return true;
       if (part[0] === '#') return this.id === part.slice(1);
 
       let match = part.match(/^\[class\*="(.+)"\]$/);
@@ -95,6 +96,22 @@ function environment() {
       }
       return null;
     }
+    querySelectorAll(selector) {
+      return this.descendants().filter(node => selector.split(',').some(part => node.matches(part)));
+    }
+    cloneNode(deep = true) {
+      const copy = new Element(this.tagName, this._text);
+      Object.assign(copy.attrs, this.attrs);
+      if (deep) this.children.forEach(child => copy.appendChild(child.cloneNode(true)));
+      return copy;
+    }
+    removeChild(node) { node.remove(); }
+    get isConnected() {
+      for (let node = this; node; node = node.parentElement) {
+        if (node === document.documentElement) return true;
+      }
+      return false;
+    }
   }
   const document = new Events();
   document.documentElement = new Element('html');
@@ -106,6 +123,11 @@ function environment() {
   document.querySelectorAll = selector => {
     state.queries++;
     return all(document.documentElement).filter(node => selector.split(',').some(part => node.matches(part)));
+  };
+  document.querySelector = selector => {
+    state.queries++;
+    return all(document.documentElement)
+      .find(node => selector.split(',').some(part => node.matches(part))) || null;
   };
   document.getElementById = id => all(document.documentElement).find(node => node.id === id) || null;
   class Observer {
@@ -185,16 +207,27 @@ test('idle page has no periodic scans and injection is idempotent', () => {
   assert.equal(env.state.observers.length, 1, '只应注册一个 MutationObserver');
 });
 
-test('shortcut targets page content once and disappears when page content is removed', () => {
-  const env = environment(); const card = env.add('button', '深度研究'); let clicks = 0;
-  card.addEventListener('click', () => clicks++); env.run();
-  const menu = env.document.getElementById('gcMenu');
-  menu.children[2].dispatchEvent(new env.Event('click'));
-  assert.equal(clicks, 1);
-  card.remove(); env.mutate(); env.advance(1000);
-  // 页面入口消失后只收起对应行；闪电本身常驻（本地功能仍要用）。
-  assert.equal(menu.children[2].style.display, 'none');
-  assert.equal(menu.style.display, 'none');
+test('local entries live in the site 功能选单 instead of a floating button', () => {
+  const env = environment(); env.add('button', '深度研究'); env.run();
+
+  assert.equal(env.document.getElementById('gcFab'), null, '不再有闪电悬浮按钮');
+  assert.equal(env.document.querySelector('[data-gc-menu-action]'), null, '没有站点菜单时不注入');
+
+  const host = addSiteMenu(env);
+  env.mutate(); env.advance(1000);
+
+  const added = host.children.filter(row => row.hasAttribute('data-gc-menu-action'));
+  assert.equal(added.length, 2);
+  assert.ok(added[0].textContent.includes('下载任务'), added[0].textContent);
+  assert.ok(added[1].textContent.includes('图片缓存'), added[1].textContent);
+
+  clickNode(env, added[0]);
+  assert.equal(env.document.getElementById('gcPanel').style.display, 'block');
+  assert.equal(env.document.getElementById('gcPanelTitle').textContent, '下载任务');
+
+  // 再来一轮刷新不得重复插入。
+  env.mutate(); env.advance(1000);
+  assert.equal(host.children.filter(row => row.hasAttribute('data-gc-menu-action')).length, 2);
 });
 
 // 每次刷新的 DOM 查询量随功能增加会变，测试只约束"刷新次数"，不锁死单次代价。
@@ -212,13 +245,11 @@ test('SPA mutation bursts coalesce and own UI mutations do not rescan', () => {
   const env = environment(); const card = env.add('button', '深度研究'); env.run();
   const cost = perRefreshCost(env);
   const settled = env.state.queries;
-  // 排空收边定时器，只观察刷新调度本身。
-  env.advance(4000);
   for (let i = 0; i < 1000; i++) env.mutate(card, 'characterData');
   assert.equal(env.state.timers.size, 1);
   env.advance(1000);
   assert.equal(env.state.queries, settled + cost, '1000 次变动只允许合并成一次刷新');
-  env.mutate(env.document.getElementById('gcMenu'), 'attributes');
+  env.mutate(env.document.getElementById('gc-theme'), 'attributes');
   env.advance(1000); assert.equal(env.state.queries, settled + cost, '自家 UI 变动不得触发刷新');
 });
 
@@ -248,19 +279,17 @@ test('editing surfaces never trigger image preview even when they contain an ima
   assert.equal(calls, 0, '输入区（composer/form）内的图片不得进入预览');
 });
 
-test('hidden targets are excluded; model name alone does not create a shortcut', () => {
+test('page buttons no longer build our own menu', () => {
   const env = environment(); const hidden = env.add('button', '深度研究'); hidden.setAttribute('hidden', '');
   env.run();
-  const menu = env.document.getElementById('gcMenu');
-  assert.ok(env.document.getElementById('gcFab'), '闪电常驻，本地功能不依赖页面按钮');
-  assert.equal(menu.children[2].style.display, 'none', '被隐藏的页面入口不得出现在菜单里');
 
-  // “切换模型”入口已按需求移除：只有模型名的页面不应出现快捷入口。
+  assert.equal(env.document.getElementById('gcFab'), null, '闪电悬浮按钮已按需求移除');
+  assert.equal(env.document.getElementById('gcMenu'), null, '自建菜单已移除');
+  assert.equal(env.document.querySelector('[data-gc-menu-action]'), null, '页面按钮不再产出菜单项');
+
+  // “切换模型”入口已按需求移除：只有模型名的页面不应产出任何入口。
   env.add('button', 'ChatGPT 5.6 Sol'); env.mutate(); env.advance(1000);
-  env.add('button', '深度研究'); env.mutate(); env.advance(1000);
-
-  assert.equal(menu.children[2].style.display, 'block');
-  assert.equal(menu.children[3].style.display, 'none');
+  assert.equal(env.document.getElementById('gcMenu'), null);
 });
 
 test('image clicks retain site behavior without a bridge and when native rejects input', () => {
@@ -311,46 +340,85 @@ test('oversized images are rejected before opening a native transfer', async () 
 
 // ---------------------------------------------------------------- 第九轮：下载 / 缓存
 
-function menuRow(env, index) {
-  return env.document.getElementById('gcMenu').children[index];
+/** 造一份站点「功能选单」浮层：三行自家菜单项（图标 + 文案），容器带 role=menu。 */
+function addSiteMenu(env) {
+  const panel = env.add('div', '');
+  panel.setAttribute('role', 'menu');
+
+  ['返回首页', '刷新会话', '对话导出'].forEach(label => {
+    const row = panel.appendChild(new env.Element('button', ''));
+    row.appendChild(new env.Element('span', '🗂'));
+    row.appendChild(new env.Element('span', label));
+  });
+
+  return panel;
 }
 
-function openMenu(env) {
-  env.document.getElementById('gcFab').dispatchEvent(new env.Event('click'));
+/** 注入到站点菜单里的本地功能行。 */
+function localEntry(env, label) {
+  const rows = env.document.querySelectorAll('[data-gc-menu-action]');
+  return rows.find(row => row.textContent.indexOf(label) !== -1) || null;
 }
 
-/** 触发元素自身的监听器（菜单行/面板按钮）。 */
+/** 触发元素自身的监听器（面板按钮 / 注入行）。 */
 function clickNode(env, node) {
   const event = new env.Event('click', {target: node});
   node.dispatchEvent(event);
   return event;
 }
 
-/** 触发挂在 document 上的捕获监听器（图片预览 / 下载拦截）。 */
+/** 触发挂在 document 上的捕获监听器（图片预览 / 下载拦截 / 功能选单开关）。 */
 function clickDocument(env, node) {
   const event = new env.Event('click', {target: node});
   env.document.dispatchEvent(event);
   return event;
 }
 
-test('menu exposes local actions that work without page targets', () => {
+test('tapping the site 功能选单 toggle injects our entries', () => {
   const env = environment(); env.add('button', '深度研究'); env.run();
-  const menu = env.document.getElementById('gcMenu');
-  assert.equal(menu.children.length, 8);
-  assert.equal(menu.children[6].style.display, 'block', '下载任务应始终可用');
-  assert.equal(menu.children[7].style.display, 'block', '图片缓存应始终可用');
+
+  assert.equal(env.document.querySelector('[data-gc-menu-action]'), null);
+
+  const host = addSiteMenu(env);
+  const pill = env.add('button', '功能选单');
+
+  clickDocument(env, pill);
+  assert.equal(env.document.querySelector('[data-gc-menu-action]'), null, '菜单渲染前不得插入');
+
+  env.advance(300);
+  const added = host.children.filter(row => row.hasAttribute('data-gc-menu-action'));
+  assert.equal(added.length, 2);
+  assert.ok(added[0].textContent.includes('下载任务'), added[0].textContent);
+  assert.ok(added[1].textContent.includes('图片缓存'), added[1].textContent);
+  assert.equal(added[0].textContent.includes('🗂'), false, '站点自带的图标要清掉');
+  assert.equal(added[0].children.length, 1, '克隆的应是整行，而不是一截文字');
+});
+
+test('tapping an injected row closes the site menu and opens our panel', () => {
+  const env = environment(); addSiteMenu(env); env.run();
+  const pill = env.add('button', '功能选单');
+  env.mutate(); env.advance(1000);
+
+  let pillClicks = 0;
+  pill.addEventListener('click', () => pillClicks++);
+
+  clickNode(env, localEntry(env, '图片缓存'));
+
+  assert.equal(pillClicks, 1, '应先收起站点自己的菜单');
+  assert.equal(env.document.getElementById('gcPanelTitle').textContent, '图片缓存');
 });
 
 test('cache panel reports stats and clears the requested kind', () => {
-  const env = environment(); env.add('button', '深度研究'); env.run();
+  const env = environment(); addSiteMenu(env); env.run();
+  env.mutate(); env.advance(1000);
+
   const cleared = [];
   env.window.GptCatBridge = {
     cacheStats(token) { return '{"images":3,"imageBytes":2048,"webBytes":4096}'; },
     clearCache(token, kind) { cleared.push(kind); return '{"images":2048,"web":true}'; }
   };
 
-  openMenu(env);
-  clickNode(env, menuRow(env, 7));
+  clickNode(env, localEntry(env, '图片缓存'));
 
   const body = env.document.getElementById('gcPanelBody');
   assert.match(body.textContent, /图片缓存文件/);
@@ -363,7 +431,8 @@ test('cache panel reports stats and clears the requested kind', () => {
 });
 
 test('zip clicks always report something and register a task', () => {
-  const env = environment(); env.add('button', '深度研究'); env.run();
+  const env = environment(); addSiteMenu(env); env.run();
+  env.mutate(); env.advance(1000);
 
   const anchor = env.add('a', '下载 ZIP', {href: 'https://cdn.example/pack.zip'});
   const ids = [];
@@ -381,8 +450,7 @@ test('zip clicks always report something and register a task', () => {
   assert.equal(chip.style.display, 'block');
   assert.match(chip.textContent, /pack\.zip/);
 
-  openMenu(env);
-  clickNode(env, menuRow(env, 6));
+  clickNode(env, localEntry(env, '下载任务'));
   assert.match(env.document.getElementById('gcPanelBody').textContent, /pack\.zip/);
 });
 
@@ -428,14 +496,18 @@ test('blob downloads stream to disk through the file bridge', async () => {
   assert.match(env.document.getElementById('gcDownloadChip').textContent, /已保存到/);
 });
 
-test('fab collapses to the screen edge and expands on tap', () => {
-  const env = environment(); env.add('button', '深度研究'); env.run();
+test('injection is idempotent and never leaves a floating button behind', () => {
+  const env = environment(); const host = addSiteMenu(env); env.run(); env.advance(4000);
 
-  const fab = env.document.getElementById('gcFab');
-  env.advance(4000);
-  assert.match(fab.style.transform, /translateX/, '闲时应收进侧边');
+  assert.equal(env.document.getElementById('gcFab'), null);
+  assert.equal(env.document.getElementById('gcMenu'), null);
 
-  fab.dispatchEvent(new env.Event('click'));
-  assert.equal(fab.style.transform, '', '点击应展开');
-  assert.equal(env.document.getElementById('gcMenu').style.display, 'block');
+  const added = host.children.filter(row => row.hasAttribute('data-gc-menu-action'));
+  assert.equal(added.length, 2);
+  added.forEach(row => assert.equal(row.getAttribute('data-gc-ui'), '', '自家节点必须带标记'));
+
+  // 站点菜单重渲染（我们两行被清掉）后应能重新插回。
+  added.forEach(row => row.remove());
+  env.mutate(); env.advance(1000);
+  assert.equal(host.children.filter(row => row.hasAttribute('data-gc-menu-action')).length, 2);
 });

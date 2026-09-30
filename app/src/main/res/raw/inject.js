@@ -5,20 +5,11 @@
   if (window !== window.top || window.__gcInjected) return;
   window.__gcInjected = true;
 
-  var ITEMS = [
-    { key: 'GPT官方镜像', icon: '🪞' },
-    { key: '香蕉 2 绘图', icon: '🍌' },
-    { key: '深度研究', icon: '🔍' },
-    { key: '思维导图', icon: '🧠' },
-    { key: '返回首页', icon: '🏠' },
-    { key: '升级套餐', icon: '⭐' },
-    { key: '下载任务', icon: '⬇️', action: 'downloads' },
-    { key: '图片缓存', icon: '🧹', action: 'cache' }
+  // 附加到站点自带「功能选单」里的两项本地功能（不再有自己的悬浮菜单）。
+  var MENU_ITEMS = [
+    { label: '下载任务', icon: '⬇️', action: 'downloads' },
+    { label: '图片缓存', icon: '🧹', action: 'cache' }
   ];
-
-  // 避免扫描聊天正文中的所有 div/section/p；入口通常只存在于交互区或导航区。
-  var SELECTOR =
-    'button,a,[role="button"],[role="menuitem"],[role="tab"],li,h3,h4,nav span,aside span,nav div,aside div';
 
   var EDITABLE_SELECTOR =
     'input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"]):not([type="radio"]),'
@@ -27,26 +18,11 @@
   var MAX_IMAGE_BYTES = 32 * 1024 * 1024;
   var CHUNK_BYTES = 48 * 1024;
 
-  var fab = null;
-  var menu = null;
-  var rows = [];
-  var targets = [];
-
   var timer = null;
   var pendingSince = 0;
   var idleToken = null;
   var suspended = false;
   var imageBusy = false;
-
-  var menuTimer = null;
-  var suppressClick = false;
-  var fabX = null;
-  var fabY = null;
-  var dragBound = false;
-  var dragState = null;
-
-  var dockTimer = null;
-  var docked = false;
 
   // 下载任务 / 图片缓存面板
   var panel = null;
@@ -176,40 +152,7 @@
       && style.opacity !== '0';
   }
 
-  function scanTargets() {
-    var result = new Array(ITEMS.length);
-    var remaining = ITEMS.length;
-    var nodes = document.querySelectorAll(SELECTOR);
-
-    for (var i = 0; i < nodes.length && remaining > 0; i++) {
-      var node = nodes[i];
-      if (own(node)) continue;
-
-      var raw = node.textContent || '';
-      if (!raw || raw.length > 100) continue;
-
-      var text = raw.trim();
-      if (!text) continue;
-
-      var checkedVisible = false;
-
-      for (var j = 0; j < ITEMS.length; j++) {
-        if (result[j]) continue;
-
-        var key = ITEMS[j].key;
-        if (text.length > key.length + 60 || text.indexOf(key) === -1) continue;
-
-        if (!checkedVisible && !visible(node)) break;
-
-        checkedVisible = true;
-        result[j] = node;
-        remaining--;
-      }
-    }
-
-    return result;
-  }
-
+  /** 只保留点击序列合成，站点菜单里注入的行复用它。 */
   function clickElement(el) {
     ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (type) {
       var EventType =
@@ -225,287 +168,220 @@
     });
   }
 
-  function cancelMenuTimer() {
-    if (menuTimer !== null) {
-      window.clearTimeout(menuTimer);
-      menuTimer = null;
+  // ------------------------------------------- 站点「功能选单」里的本地功能
+
+  // 站点菜单是它自己的组件（Naive UI 浮层），类名会变、每次发版都可能不同，
+  // 所以这里不猜类名：只用文案找到它已有的行，把行容器和行模板记下来，
+  // 把我们那两项「按同一个模板克隆」插进去，样式/间距天然跟站点一致。
+  var MENU_ITEM_TEXTS = ['对话导出', '刷新会话', '预设提示词', '查看公告'];
+  var MENU_ROW_SELECTOR =
+    'button,[role="menuitem"],[role="option"],[role="button"],li,a,div,span';
+
+  var menuHost = null;
+  var menuTemplate = null;
+  var menuProbed = 0;
+
+  function shortText(node) {
+    var text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+    return text.length > 0 && text.length <= 12 ? text : '';
+  }
+
+  /** 站点菜单里已有的行，用来定位容器与取行模板。只在需要时扫描一次。 */
+  function siteMenuRows() {
+    var nodes = document.querySelectorAll(MENU_ROW_SELECTOR);
+    var found = [];
+
+    for (var i = 0; i < nodes.length && found.length < 6; i++) {
+      var node = nodes[i];
+      if (node === document.body || own(node)) continue;
+
+      var text = shortText(node);
+      if (text && MENU_ITEM_TEXTS.indexOf(text) !== -1) found.push(node);
+    }
+
+    return found;
+  }
+
+  /** 兄弟里有几个「短文本行」，用来判断这个父节点是不是菜单的行容器。 */
+  function rowLikeChildren(node) {
+    var count = 0;
+
+    for (var i = 0; i < node.children.length; i++) {
+      var child = node.children[i];
+      if (child.hasAttribute('data-gc-ui')) continue;
+      if (shortText(child)) count++;
+    }
+
+    return count;
+  }
+
+  /**
+   * 站点每一行都带图标（emoji 或 svg），所以「行节点」的文字并不等于纯文案，
+   * 能精确匹配到文案的通常只是里面那个 label。把 label 的祖先收敛到容器的
+   * 直接子节点，拿到的才是整行 —— 否则克隆出来的只有一截文字，样式全丢。
+   */
+  function rowFor(host, node) {
+    var row = node;
+
+    while (row.parentElement && row.parentElement !== host) row = row.parentElement;
+
+    return row.parentElement === host ? row : node;
+  }
+
+  function findMenuHost() {
+    var rows = siteMenuRows();
+
+    for (var r = 0; r < rows.length; r++) {
+      var node = rows[r];
+
+      for (var up = 0; up < 4 && node.parentElement; up++) {
+        node = node.parentElement;
+
+        if (node === document.body) break;
+        if (rowLikeChildren(node) < 3) continue;
+
+        return { host: node, template: rowFor(node, rows[r]) };
+      }
+    }
+
+    return null;
+  }
+
+  /** 摘掉克隆行从站点带过来的 data-*（我们自己的两个标记除外）。 */
+  function stripDataAttrs(row) {
+    if (!row.attributes || !row.removeAttribute) return;
+
+    var names = [];
+
+    for (var i = 0; i < row.attributes.length; i++) {
+      var name = row.attributes[i].name || '';
+      if (name.indexOf('data-') === 0 && name.indexOf('data-gc-') !== 0) names.push(name);
+    }
+
+    for (var j = 0; j < names.length; j++) row.removeAttribute(names[j]);
+  }
+
+  /** 行里承载文案的节点：最深、且文字刚好等于某个已知菜单项。 */
+  function labelNodeIn(row) {
+    var nodes = row.querySelectorAll ? row.querySelectorAll('*') : [];
+    var found = null;
+
+    for (var i = 0; i < nodes.length; i++) {
+      var text = shortText(nodes[i]);
+      if (text && MENU_ITEM_TEXTS.indexOf(text) !== -1) found = nodes[i];
+    }
+
+    return found;
+  }
+
+  /** 去掉站点那一行自带的图标，免得我们的文字配着别人的图标。 */
+  function stripIcons(row, keep) {
+    var nodes = row.querySelectorAll ? row.querySelectorAll('*') : [];
+
+    for (var i = nodes.length - 1; i >= 0; i--) {
+      var node = nodes[i];
+      if (!node.parentElement) continue;
+      if (keep && (node === keep || node.contains(keep))) continue;
+
+      var tag = (node.tagName || '').toLowerCase();
+      if (tag === 'svg' || tag === 'img' || tag === 'use') {
+        node.parentElement.removeChild(node);
+        continue;
+      }
+
+      var text = (node.textContent || '').trim();
+      if (node.children.length === 0 && text && text.length <= 3) {
+        node.parentElement.removeChild(node);
+      }
     }
   }
 
-  function hide() {
-    if (menu) menu.style.display = 'none';
-    if (fab) fab.setAttribute('aria-expanded', 'false');
+  /** 点一下右上角的「功能选单」开关，把站点菜单收起来。 */
+  function closeSiteMenu() {
+    var nodes = document.querySelectorAll('button,[role="button"],div,span');
 
-    cancelMenuTimer();
-    scheduleDock();
-  }
+    for (var i = 0; i < nodes.length && i < 400; i++) {
+      var node = nodes[i];
+      if (own(node)) continue;
 
-  function placeMenu() {
-    if (!fab || !menu) return;
+      var text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text !== '功能选单' || !visible(node)) continue;
 
-    var fr = fab.getBoundingClientRect();
-    var vw = viewportWidth();
-    var vh = viewportHeight();
-
-    var mw = vw >= 600 ? 196 : 160;
-    var mh = Math.min(vh - 16, 12 + ITEMS.length * (vw >= 600 ? 48 : 42));
-
-    var left = fr.right > vw / 2 ? fr.right - mw : fr.left;
-    var top = fr.top - mh - 10;
-
-    if (top < 8) top = fr.bottom + 10;
-
-    menu.style.width = mw + 'px';
-    menu.style.maxHeight = Math.max(120, vh - 16) + 'px';
-    menu.style.overflowY = 'auto';
-    menu.style.left = Math.max(4, Math.min(vw - mw - 4, left)) + 'px';
-    menu.style.top = Math.max(8, Math.min(vh - 8, top)) + 'px';
-    menu.style.right = 'auto';
-    menu.style.bottom = 'auto';
-  }
-
-  function clampFabPosition() {
-    if (fabX == null || fabY == null) return;
-
-    var size = viewportWidth() >= 600 ? 54 : 48;
-    fabX = Math.max(4, Math.min(viewportWidth() - size - 4, fabX));
-    fabY = Math.max(4, Math.min(viewportHeight() - size - 4, fabY));
-
-    fab.style.left = fabX + 'px';
-    fab.style.top = fabY + 'px';
-    fab.style.right = 'auto';
-    fab.style.bottom = 'auto';
-  }
-
-  function applyFabPos() {
-    try {
-      var raw = localStorage.getItem('gcFabPos');
-      if (raw) {
-        var p = JSON.parse(raw);
-        if (isFinite(p.x) && isFinite(p.y)) {
-          fabX = p.x;
-          fabY = p.y;
-        }
-      }
-    } catch (e) { }
-
-    clampFabPosition();
-  }
-
-  function bindFabDrag() {
-    if (typeof PointerEvent !== 'function') return;
-
-    fab.addEventListener('pointerdown', function (event) {
-      cancelDock();
-
-      dragState = {
-        sx: event.clientX,
-        sy: event.clientY,
-        ox: fab.offsetLeft,
-        oy: fab.offsetTop,
-        moved: false
-      };
-    });
-
-    if (dragBound) return;
-    dragBound = true;
-
-    document.addEventListener('pointermove', function (event) {
-      if (!dragState) return;
-
-      var dx = event.clientX - dragState.sx;
-      var dy = event.clientY - dragState.sy;
-
-      if (!dragState.moved && Math.abs(dx) + Math.abs(dy) > 12) {
-        dragState.moved = true;
-      }
-
-      if (!dragState.moved) return;
-
-      var size = viewportWidth() >= 600 ? 54 : 48;
-
-      fabX = Math.max(
-        4,
-        Math.min(viewportWidth() - size - 4, dragState.ox + dx)
-      );
-
-      fabY = Math.max(
-        4,
-        Math.min(viewportHeight() - size - 4, dragState.oy + dy)
-      );
-
-      fab.style.left = fabX + 'px';
-      fab.style.top = fabY + 'px';
-      fab.style.right = 'auto';
-      fab.style.bottom = 'auto';
-      hide();
-    }, true);
-
-    document.addEventListener('pointerup', function () {
-      if (!dragState) return;
-
-      if (dragState.moved) {
-        suppressClick = true;
-
-        try {
-          localStorage.setItem(
-            'gcFabPos',
-            JSON.stringify({ x: fabX, y: fabY })
-          );
-        } catch (e) { }
-      }
-
-      dragState = null;
-      scheduleDock();
-    }, true);
-  }
-
-  function startMenuTimer() {
-    cancelMenuTimer();
-    menuTimer = window.setTimeout(hide, 4000);
-  }
-
-  // 空闲后把闪电收进最近的侧边，只留一小截；点一下再展开。
-  var DOCK_PEEK = 12;
-
-  function dockSide() {
-    if (!fab || fab.style.display === 'none') return;
-    if (menu && menu.style.display === 'block') return;
-
-    var vw = viewportWidth();
-    var size = vw >= 600 ? 54 : 48;
-    var center = (fabX != null ? fabX : fab.offsetLeft) + size / 2;
-    var dir = center <= vw / 2 ? -1 : 1;
-
-    docked = true;
-    fab.style.transition = 'transform .24s ease, opacity .24s ease';
-    fab.style.transform =
-      'translateX(' + dir * (size - DOCK_PEEK) + 'px) scale(.9)';
-    fab.style.opacity = '.62';
-  }
-
-  function undock() {
-    if (!docked) return;
-
-    docked = false;
-    fab.style.transform = '';
-    fab.style.opacity = '';
-  }
-
-  function scheduleDock() {
-    if (dockTimer !== null) window.clearTimeout(dockTimer);
-
-    dockTimer = window.setTimeout(function () {
-      dockTimer = null;
-
-      if (!suspended
-          && !document.hidden
-          && fab
-          && menu
-          && menu.style.display !== 'block') {
-        dockSide();
-      }
-    }, 3000);
-  }
-
-  function cancelDock() {
-    if (dockTimer !== null) {
-      window.clearTimeout(dockTimer);
-      dockTimer = null;
+      clickElement(node);
+      return;
     }
-
-    undock();
   }
 
-  function build() {
-    if (fab) fab.remove();
-    if (menu) menu.remove();
+  function paintMenuEntries(host, template) {
+    if (!host || !template || !template.cloneNode) return false;
+    if (host.querySelector('[data-gc-menu-action]')) return true;
 
-    rows = [];
+    MENU_ITEMS.forEach(function (item) {
+      var row = template.cloneNode(true);
 
-    fab = mark(document.createElement('button'));
-    fab.id = 'gcFab';
-    fab.type = 'button';
-    fab.textContent = '⚡';
-    fab.setAttribute('aria-label', '快捷入口');
-    fab.setAttribute('aria-expanded', 'false');
-    fab.setAttribute('aria-controls', 'gcMenu');
-    fab.style.cssText =
-      'position:fixed;right:16px;bottom:110px;width:48px;height:48px;'
-      + 'border:0;border-radius:50%;background:var(--gc-accent,#1f6feb);color:#fff;display:none;'
-      + 'align-items:center;justify-content:center;font-size:22px;z-index:2147483000;'
-      + 'box-shadow:0 4px 12px rgba(0,0,0,.25);cursor:pointer;user-select:none;touch-action:none;';
+      if (row.removeAttribute) row.removeAttribute('id');
+      row.setAttribute('data-gc-ui', '');
+      row.setAttribute('data-gc-menu-action', item.action);
 
-    menu = mark(document.createElement('div'));
-    menu.id = 'gcMenu';
-    menu.style.cssText =
-      'position:fixed;right:16px;bottom:168px;z-index:2147483000;display:none;'
-      + 'background:var(--gc-bg,#fff);border:1px solid var(--gc-border,#e5e7eb);border-radius:12px;'
-      + 'box-shadow:0 6px 24px rgba(0,0,0,.15);padding:6px;min-width:150px;'
-      + 'box-sizing:border-box;overscroll-behavior:contain;';
+      // 站点每一行是 div[data-action=...]，靠事件委托分发动作。
+      // 克隆行必须把这些 data-* 摘掉，否则点我们的项会连带触发它的动作。
+      stripDataAttrs(row);
 
-    fab.addEventListener('click', function (event) {
-      event.stopPropagation();
+      var label = labelNodeIn(row);
+      var caption = item.icon + ' ' + item.label;
 
-      if (suppressClick) {
-        suppressClick = false;
-        return;
-      }
-
-      cancelDock();
-
-      var opening = menu.style.display !== 'block';
-
-      if (opening) {
-        placeMenu();
-        menu.style.display = 'block';
-        startMenuTimer();
+      if (label && label !== row) {
+        stripIcons(row, label);
+        label.textContent = caption;
       } else {
-        hide();
+        row.textContent = caption;
       }
 
-      fab.setAttribute('aria-expanded', String(opening));
-    });
-
-    menu.addEventListener('pointerdown', startMenuTimer);
-
-    ITEMS.forEach(function (item, index) {
-      var row = mark(document.createElement('button'));
-
-      row.type = 'button';
-      row.className = 'gc-menu-row';
-      row.textContent = item.icon + '  ' + (item.label || item.key);
-      row.style.cssText =
-        'display:block;width:100%;border:0;background:var(--gc-bg,#fff);text-align:left;'
-        + 'padding:10px 14px;border-radius:8px;font-size:14px;'
-        + 'color:var(--gc-fg,#1f2937);cursor:pointer;';
-
+      // 站点可能用事件委托读 index 选菜单项，捕获阶段先拦掉，别让它误触发。
       row.addEventListener('click', function (event) {
+        event.preventDefault();
         event.stopPropagation();
+        closeSiteMenu();
+        runAction(item.action);
+      }, true);
 
-        if (item.action) {
-          hide();
-          runAction(item.action);
-          return;
-        }
-
-        targets = scanTargets();
-        hide();
-
-        if (targets[index]) clickElement(targets[index]);
-        schedule();
-      });
-
-      rows.push(row);
-      menu.appendChild(row);
+      host.appendChild(row);
     });
 
-    document.body.appendChild(fab);
-    document.body.appendChild(menu);
+    return true;
+  }
 
-    bindFabDrag();
-    applyFabPos();
-    scheduleDock();
+  /**
+   * 菜单已渲染就把两项插进去；没渲染就什么都不做。
+   * force=true 只在「用户点了功能选单开关」时用，此时才值得扫一次全页。
+   */
+  function syncMenuEntries(force) {
+    if (menuHost && menuHost.isConnected
+        && menuTemplate && menuTemplate.isConnected) {
+      return paintMenuEntries(menuHost, menuTemplate);
+    }
+
+    menuHost = null;
+    menuTemplate = null;
+
+    if (!force) {
+      // 站点菜单是挂在 body 下的浮层；没有浮层就不扫全页，避免拖慢聊天页。
+      if (!document.querySelector('[role="menu"],[role="listbox"],[role="dialog"]')) {
+        return false;
+      }
+
+      var now = Date.now();
+      if (now - menuProbed < 1500) return false;
+      menuProbed = now;
+    }
+
+    var found = findMenuHost();
+    if (!found) return false;
+
+    menuHost = found.host;
+    menuTemplate = found.template;
+
+    return paintMenuEntries(menuHost, menuTemplate);
   }
 
   // ---------------------------------------------------------------- 主题
@@ -540,14 +416,7 @@
       '[data-gc-ui]{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
       + '-webkit-tap-highlight-color:transparent}'
       + '@media (min-width:600px){'
-      + '#gcFab{width:54px!important;height:54px!important;font-size:24px!important;'
-      + 'right:24px!important;bottom:96px!important}'
-      + '#gcMenu{border-radius:14px!important;padding:8px!important}'
-      + '#gcMenu .gc-menu-row{font-size:15px!important;padding:12px 16px!important}'
-      + '}'
-      + '@media (orientation:landscape) and (max-height:520px){'
-      + '#gcFab{bottom:28px!important}'
-      + '#gcMenu .gc-menu-row{padding-top:8px!important;padding-bottom:8px!important}'
+      + '#gcPanel{width:min(480px,calc(100vw - 48px))!important;font-size:15px!important}'
       + '}';
 
     (document.head || document.documentElement).appendChild(style);
@@ -563,25 +432,7 @@
     applyAdaptiveStyle();
     applyPluginStyle();
     enhanceChatLayout();
-    targets = scanTargets();
-
-    if (!fab
-        || !menu
-        || !document.body.contains(fab)
-        || !document.body.contains(menu)) {
-      build();
-    }
-
-    // 闪电常驻：下载任务/图片缓存属于本地功能，不依赖站点按钮。
-    fab.style.display = 'flex';
-
-    rows.forEach(function (row, index) {
-      // 本地功能项始终可用；页面入口项跟着页面按钮出现或消失。
-      row.style.display =
-        ITEMS[index].action || targets[index] ? 'block' : 'none';
-    });
-
-    if (!targets.some(Boolean) && !tasks.length) hide();
+    syncMenuEntries(false);
   }
 
   function runRefreshWhenIdle() {
@@ -894,9 +745,6 @@
     document.getElementById('gcPanelTitle').textContent =
       kind === 'downloads' ? '下载任务' : '图片缓存';
 
-    // 面板打开时把闪电展开，避免它缩在侧边看不见。
-    cancelDock();
-
     if (kind === 'downloads') {
       refreshTasks();
     } else {
@@ -914,7 +762,6 @@
     }
 
     if (tasks.length) schedule();
-    scheduleDock();
   }
 
   function runAction(action) {
@@ -1640,22 +1487,28 @@
     event.stopPropagation();
   }, true);
 
+  // 点「功能选单」开关后菜单是异步渲染的，稍等一下再把我们两项插进去。
   document.addEventListener('click', function (event) {
-    if (!own(event.target)) hide();
+    var node = event.target;
+
+    if (!node || !node.textContent) return;
+
+    if (node.textContent.replace(/\s+/g, ' ').trim() !== '功能选单') return;
+
+    window.setTimeout(function () { syncMenuEntries(true); }, 220);
+  }, true);
+
+  document.addEventListener('click', function (event) {
+    // 点面板外面收起面板；面板自身的按钮都带 data-gc-ui。
+    if (panel && panel.style.display === 'block' && !own(event.target)) closePanel();
   });
 
   document.addEventListener('keydown', function (event) {
     // 硬件键盘/平板键盘：按键意味着用户正在主动编辑，不做自动 blur。
-    if (event.key === 'Escape') hide();
+    if (event.key === 'Escape') closePanel();
   });
 
   function onViewportChange() {
-    if (fabX != null) clampFabPosition();
-
-    if (menu && menu.style.display === 'block') {
-      placeMenu();
-    }
-
     enhanceChatLayout();
     schedule();
   }
@@ -1684,7 +1537,7 @@
 
       timer = null;
       pendingSince = 0;
-      hide();
+      closePanel();
       suppressKeyboard();
     } else {
       // 从后台回来不恢复自动弹出的键盘。
