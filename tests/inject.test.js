@@ -153,6 +153,7 @@ function environment() {
   };
   window.clearTimeout = id => state.timers.delete(id);
   window.alert = text => state.alerts.push(text);
+  window.confirm = () => true;
   window.matchMedia = () => ({matches: false, addEventListener() { }, addListener() { }});
 
   const store = new Map();

@@ -5,8 +5,11 @@ import android.content.ComponentCallbacks2;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 
@@ -19,6 +22,7 @@ import com.gptcat.app.web.FileChooserHandler;
 public class MainActivity extends Activity {
     private BrowserController browser;
     private FileChooserHandler fileChooser;
+    private Object backCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -33,6 +37,7 @@ public class MainActivity extends Activity {
         ProgressBar progress = findViewById(R.id.progressBar);
         browser = new BrowserController(this, root, progress, fileChooser);
         browser.restoreOrLoad(savedInstanceState);
+        registerBackCallback();
 
         // 后台线程轻量检查；最多每 12 小时一次，不阻塞首屏。
         UpdateChecker.check(this);
@@ -75,14 +80,49 @@ public class MainActivity extends Activity {
         super.onLowMemory();
     }
 
+    private void registerBackCallback() {
+        if (Build.VERSION.SDK_INT < 33 || backCallback != null) return;
+
+        backCallback = Api33Back.register(this, () -> {
+            if (browser == null || !browser.goBack()) finish();
+        });
+    }
+
+    private void unregisterBackCallback() {
+        if (Build.VERSION.SDK_INT < 33 || backCallback == null) return;
+        Api33Back.unregister(this, backCallback);
+        backCallback = null;
+    }
+
+    /** Keep API 33 types isolated so MainActivity can still be verified/loaded on API 24-32. */
+    private static final class Api33Back {
+        static Object register(Activity activity, Runnable action) {
+            OnBackInvokedCallback callback = action::run;
+            activity.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
+            return callback;
+        }
+
+        static void unregister(Activity activity, Object value) {
+            activity.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(
+                    (OnBackInvokedCallback) value);
+        }
+    }
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_BACK && browser != null && browser.goBack()) return true;
+        if (Build.VERSION.SDK_INT < 33
+                && keyCode == KeyEvent.KEYCODE_BACK
+                && browser != null
+                && browser.goBack()) {
+            return true;
+        }
         return super.onKeyDown(keyCode, event);
     }
 
     @Override
     protected void onDestroy() {
+        unregisterBackCallback();
         if (fileChooser != null) fileChooser.cancel();
         if (browser != null) browser.destroy();
         browser = null;

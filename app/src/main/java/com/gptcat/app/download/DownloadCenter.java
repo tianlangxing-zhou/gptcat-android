@@ -23,6 +23,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * 下载任务中心：
@@ -34,7 +36,8 @@ public final class DownloadCenter {
 
     private static final String PREFS = "gptcat-downloads";
     private static final String KEY_LOCAL = "localTasks";
-    private static final long MAX_TEMP_BYTES = 512L * 1024 * 1024;
+    private static final long MAX_TEMP_BYTES = 128L * 1024 * 1024;
+    private static final Pattern MIME = Pattern.compile("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+");
 
     private DownloadCenter() { }
 
@@ -42,7 +45,7 @@ public final class DownloadCenter {
 
     /** 返回任务 ID 字符串；返回空串表示未能创建。 */
     public static String enqueue(Context context, String url, String name, String mime) {
-        if (!UrlPolicy.isHttpUrl(url)) return "";
+        if (!UrlPolicy.isHttpsUrl(url)) return "";
 
         DownloadManager manager =
                 (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
@@ -62,7 +65,7 @@ public final class DownloadCenter {
                     Environment.DIRECTORY_DOWNLOADS, SUBDIR + "/" + safe);
 
             if (mime != null && !mime.trim().isEmpty()) {
-                request.setMimeType(mime);
+                request.setMimeType(safeMime(mime));
             }
 
             String cookie = CookieManager.getInstance().getCookie(url);
@@ -96,8 +99,8 @@ public final class DownloadCenter {
         try (Cursor cursor = manager.query(new DownloadManager.Query())) {
             if (cursor == null) return array.toString();
 
-            int guard = 0;
-            while (cursor.moveToNext() && guard++ < 30) {
+            int scanned = 0;
+            while (cursor.moveToNext() && scanned++ < 500) {
                 long id = longAt(cursor, DownloadManager.COLUMN_ID, -1L);
                 if (id < 0) continue;
 
@@ -113,7 +116,9 @@ public final class DownloadCenter {
 
         rows.sort((left, right) -> Long.compare((Long) right[0], (Long) left[0]));
 
-        for (Object[] row : rows) {
+        int visible = Math.min(30, rows.size());
+        for (int i = 0; i < visible; i++) {
+            Object[] row = rows.get(i);
             long total = (Long) row[3];
             long done = (Long) row[4];
 
@@ -143,9 +148,9 @@ public final class DownloadCenter {
         if (manager == null) return false;
 
         try {
-            manager.remove(id);
+            int removed = manager.remove(id);
             prefs(context).edit().remove(key(id)).apply();
-            return true;
+            return removed > 0;
         } catch (RuntimeException e) {
             return false;
         }
@@ -328,9 +333,11 @@ public final class DownloadCenter {
         loadLocal(context);
 
         boolean removed = false;
+        Uri uri = null;
         synchronized (LOCAL) {
             for (int i = 0; i < LOCAL.size(); i++) {
                 if (LOCAL.get(i)[0].equals(id)) {
+                    uri = (Uri) LOCAL.get(i)[2];
                     LOCAL.remove(i);
                     removed = true;
                     break;
@@ -338,8 +345,13 @@ public final class DownloadCenter {
             }
         }
 
-        if (removed) saveLocal(context);
-        return removed;
+        if (!removed) return false;
+        saveLocal(context);
+        if (uri != null) {
+            try { context.getContentResolver().delete(uri, null, null); }
+            catch (RuntimeException ignored) { }
+        }
+        return true;
     }
 
     public static File createTemp(Context context) throws IOException {
@@ -358,9 +370,7 @@ public final class DownloadCenter {
     public static Uri publish(Context context, File temp, String name, String mime)
             throws IOException {
         String safe = safeName(name, "");
-        String type = mime == null || mime.trim().isEmpty()
-                ? "application/octet-stream"
-                : mime;
+        String type = safeMime(mime);
 
         if (Build.VERSION.SDK_INT >= 29) {
             ContentResolver resolver = context.getContentResolver();
@@ -385,7 +395,15 @@ public final class DownloadCenter {
 
             values.clear();
             values.put(MediaStore.MediaColumns.IS_PENDING, 0);
-            resolver.update(target, values, null, null);
+            try {
+                if (resolver.update(target, values, null, null) == 0) {
+                    resolver.delete(target, null, null);
+                    throw new IOException("无法发布下载文件");
+                }
+            } catch (RuntimeException e) {
+                try { resolver.delete(target, null, null); } catch (RuntimeException ignored) { }
+                throw new IOException("无法发布下载文件", e);
+            }
             return target;
         }
 
@@ -406,26 +424,36 @@ public final class DownloadCenter {
         values.put(MediaStore.MediaColumns.DATA, target.getAbsolutePath());
         values.put(MediaStore.MediaColumns.DISPLAY_NAME, target.getName());
         values.put(MediaStore.MediaColumns.MIME_TYPE, type);
-        Uri uri = context.getContentResolver()
-                .insert(MediaStore.Files.getContentUri("external"), values);
-        return uri != null ? uri : Uri.fromFile(target);
+        final Uri uri;
+        try {
+            uri = context.getContentResolver()
+                    .insert(MediaStore.Files.getContentUri("external"), values);
+        } catch (RuntimeException e) {
+            target.delete();
+            throw new IOException("无法登记下载文件", e);
+        }
+        if (uri == null) {
+            target.delete();
+            throw new IOException("无法登记下载文件");
+        }
+        return uri;
     }
 
     // ---------------------------------------------------------------- 工具
 
     public static String safeName(String name, String url) {
-        String value = name == null ? "" : name.trim();
-        if (value.isEmpty() && url != null) {
-            try {
-                String path = Uri.parse(url).getLastPathSegment();
-                value = path == null ? "" : path;
-            } catch (RuntimeException ignored) { }
-        }
-        if (value.isEmpty()) value = "gptcat-download";
+        return FileNamePolicy.safeName(name, url);
+    }
 
-        value = value.replace('\\', '_').replace('/', '_').replaceAll("[\\p{Cntrl}]", "_");
-        if (value.length() > 120) value = value.substring(0, 120);
-        return value.isEmpty() ? "gptcat-download" : value;
+    /** Strip MIME parameters and reject malformed values before handing them to system APIs. */
+    public static String safeMime(String mime) {
+        String value = mime == null ? "" : mime.trim();
+        int semicolon = value.indexOf(';');
+        if (semicolon >= 0) value = value.substring(0, semicolon).trim();
+        if (value.length() > 127 || !MIME.matcher(value).matches()) {
+            return "application/octet-stream";
+        }
+        return value.toLowerCase(Locale.ROOT);
     }
 
     public static String nameFromDisposition(String disposition, String url) {
@@ -438,16 +466,16 @@ public final class DownloadCenter {
                     int mark = raw.indexOf("''");
                     if (mark >= 0) raw = raw.substring(mark + 2);
                     try {
-                        return java.net.URLDecoder.decode(raw, "UTF-8");
+                        return safeName(java.net.URLDecoder.decode(raw, "UTF-8"), url);
                     } catch (Exception ignored) { }
                 }
                 if (item.regionMatches(true, 0, "filename=", 0, 9)) {
                     String raw = item.substring(9).trim().replace("\"", "");
                     if (!raw.isEmpty()) {
                         try {
-                            return java.net.URLDecoder.decode(raw, "UTF-8");
+                            return safeName(java.net.URLDecoder.decode(raw, "UTF-8"), url);
                         } catch (Exception ignored) {
-                            return raw;
+                            return safeName(raw, url);
                         }
                     }
                 }
@@ -462,7 +490,7 @@ public final class DownloadCenter {
         int count;
         while ((count = input.read(buffer)) != -1) {
             total += count;
-            if (total > MAX_TEMP_BYTES) throw new IOException("文件超过 512 MiB 限制");
+            if (total > MAX_TEMP_BYTES) throw new IOException("文件超过 128 MiB 限制");
             output.write(buffer, 0, count);
         }
         output.flush();

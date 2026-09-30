@@ -14,10 +14,12 @@ try:
     project = base / 'project with spaces'
     shutil.copytree(root / 'app', project / 'app')
     shutil.copy2(root / 'build_apk.sh', project / 'build_apk.sh')
+    # The real signing key is intentionally absent from source archives; fake tools only need a fixture.
+    (project / 'app/src/main/gptcat.keystore').touch()
     sdk, jdk = base / 'sdk with spaces', base / 'jdk with spaces'
     bt = sdk / 'build-tools' / '36.0.0'
-    (sdk / 'platforms' / 'android-35').mkdir(parents=True)
-    (sdk / 'platforms' / 'android-35' / 'android.jar').touch()
+    (sdk / 'platforms' / 'android-36').mkdir(parents=True)
+    (sdk / 'platforms' / 'android-36' / 'android.jar').touch()
     (bt / 'lib').mkdir(parents=True)
     (bt / 'lib' / 'd8.jar').touch()
     (bt / 'lib' / 'apksigner.jar').touch()

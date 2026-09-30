@@ -871,7 +871,7 @@
         }));
       }
 
-      actions.appendChild(panelButton('移除', function () {
+      actions.appendChild(panelButton('删除文件', function () {
         removeTask(task.id);
       }));
 
@@ -893,6 +893,9 @@
 
   function removeTask(id) {
     var bridge = window.GptCatBridge;
+
+    if (typeof window.confirm === 'function'
+        && !window.confirm('删除该下载文件及任务记录？此操作不可撤销。')) return;
 
     if (bridge && typeof bridge.removeDownload === 'function') {
       try {
@@ -998,7 +1001,7 @@
 
   // ------------------------------------------------------------- 下载任务
 
-  var MAX_FILE_BYTES = 512 * 1024 * 1024;
+  var MAX_FILE_BYTES = 128 * 1024 * 1024;
 
   function statusText(status) {
     if (status === 'success') return '已完成';
@@ -1168,7 +1171,7 @@
       })
       .then(function (blob) {
         if (!blob || !blob.size) throw new Error('文件为空');
-        if (blob.size > MAX_FILE_BYTES) throw new Error('文件超过 512 MiB 限制');
+        if (blob.size > MAX_FILE_BYTES) throw new Error('文件超过 128 MiB 限制');
 
         var id = bridge.beginFile(bridgeToken, fileName, blob.type || '', blob.size);
         if (!id) throw new Error('无法开始保存');

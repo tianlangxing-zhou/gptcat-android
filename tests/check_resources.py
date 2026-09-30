@@ -24,3 +24,12 @@ for file in xml_files:
     for kind, name in re.findall(r'@(?!(?:android:|\+))(\w+)/(\w+)', file.read_text(encoding='utf-8')):
         assert (kind, name) in resources, f'{file}: missing @{kind}/{name}'
 print(f'PASS: {len(xml_files)} XML files and all local Java/XML resource references')
+
+manifest = ET.parse(root / 'AndroidManifest.xml').getroot()
+android = '{http://schemas.android.com/apk/res/android}'
+uses_sdk = manifest.find('uses-sdk')
+assert uses_sdk is not None and uses_sdk.get(android + 'targetSdkVersion') == '36'
+application = manifest.find('application')
+assert application is not None and application.get(android + 'usesCleartextTraffic') == 'false'
+assert application.get(android + 'allowBackup') == 'false'
+print('PASS: manifest security invariants and targetSdk 36')

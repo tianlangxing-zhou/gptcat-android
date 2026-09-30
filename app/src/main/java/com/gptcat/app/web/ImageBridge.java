@@ -74,7 +74,7 @@ public final class ImageBridge {
 
     @JavascriptInterface
     public synchronized boolean openImage(String value, String url) {
-        if (!allowed(value) || !UrlPolicy.isHttpUrl(url)) return false;
+        if (!allowed(value) || !UrlPolicy.isHttpsUrl(url)) return false;
         return launch(url, null);
     }
 
@@ -134,6 +134,8 @@ public final class ImageBridge {
             File ready = transferFile;
             transferFile = null;
             transferId = null;
+            expectedBytes = 0;
+            receivedBytes = 0;
 
             if (!launch(null, ready)) {
                 ready.delete();
@@ -185,7 +187,7 @@ public final class ImageBridge {
      */
     @JavascriptInterface
     public synchronized String downloadFile(String value, String url, String name) {
-        if (!allowed(value) || !UrlPolicy.isHttpUrl(url)) return "";
+        if (!allowed(value) || !UrlPolicy.isHttpsUrl(url)) return "";
 
         Activity activity = activityRef.get();
         if (activity == null) return "";
@@ -280,7 +282,7 @@ public final class ImageBridge {
             fileExpected = bytes;
             fileReceived = 0;
             fileName = DownloadCenter.safeName(name, "");
-            fileMime = mime == null ? "" : mime;
+            fileMime = DownloadCenter.safeMime(mime);
             return fileTransferId;
         } catch (IOException e) {
             clearFileTransfer();
@@ -323,6 +325,7 @@ public final class ImageBridge {
         File ready = fileTransferFile;
         String name = fileName;
         String mime = fileMime;
+        long bytes = fileReceived;
 
         try {
             fileTransfer.close();
@@ -331,6 +334,8 @@ public final class ImageBridge {
         fileTransfer = null;
         fileTransferFile = null;
         fileTransferId = null;
+        fileName = null;
+        fileMime = null;
         fileReceived = 0;
         fileExpected = 0;
 
@@ -338,10 +343,10 @@ public final class ImageBridge {
             Uri uri = DownloadCenter.publish(context, ready, name, mime);
             ready.delete();
 
-            String taskId = DownloadCenter.rememberLocal(context, name, uri, 0L);
+            String taskId = DownloadCenter.rememberLocal(context, name, uri, bytes);
             notifySaved(name, uri, mime);
             return taskId;
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             ready.delete();
             return "";
         }
@@ -362,9 +367,11 @@ public final class ImageBridge {
         open.setDataAndType(uri, mime == null || mime.trim().isEmpty() ? "*/*" : mime);
         open.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
+        int notificationId = 0x23000000
+                | (uri.toString().hashCode() & 0x00ffffff);
         android.app.PendingIntent pending = android.app.PendingIntent.getActivity(
                 context,
-                6302,
+                notificationId,
                 open,
                 android.app.PendingIntent.FLAG_UPDATE_CURRENT
                         | android.app.PendingIntent.FLAG_IMMUTABLE);
@@ -381,7 +388,7 @@ public final class ImageBridge {
                 .setCategory(android.app.Notification.CATEGORY_STATUS)
                 .build();
 
-        manager.notify(6302, notification);
+        manager.notify(notificationId, notification);
         if (activity == null) return;
     }
 

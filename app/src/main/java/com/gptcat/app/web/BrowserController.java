@@ -10,6 +10,7 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.view.View;
@@ -115,8 +116,11 @@ public final class BrowserController {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setLoadsImagesAutomatically(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        settings.setSupportMultipleWindows(false);
 
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        if (Build.VERSION.SDK_INT >= 26) settings.setSafeBrowsingEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowFileAccessFromFileURLs(false);
         settings.setAllowUniversalAccessFromFileURLs(false);
@@ -155,13 +159,14 @@ public final class BrowserController {
             if (type == WebView.HitTestResult.IMAGE_TYPE
                     || type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
                 String extra = hit.getExtra();
-                if (extra != null && UrlPolicy.isHttpUrl(extra)) {
+                if (extra != null && UrlPolicy.isHttpsUrl(extra)) {
                     Intent viewer = new Intent(activity, ImageViewerActivity.class);
                     viewer.putExtra(ImageViewerActivity.EXTRA_URL, extra);
                     viewer.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
                     activity.startActivity(viewer);
+                    return true;
                 }
-                return true;
+                return false;
             }
             return false;
         });

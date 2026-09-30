@@ -55,7 +55,7 @@ public final class ImageLoader {
                 try {
                     file = ImageFiles.resolve(context, cacheName);
                 } catch (IOException e) {
-                    if (!UrlPolicy.isHttpUrl(url)) throw e;
+                    if (!UrlPolicy.isHttpsUrl(url)) throw e;
                 }
             }
 
@@ -99,7 +99,7 @@ public final class ImageLoader {
     }
 
     private void download(String source, File destination) throws IOException {
-        if (!UrlPolicy.isHttpUrl(source)) throw new IOException("无效的图片地址");
+        if (!UrlPolicy.isHttpsUrl(source)) throw new IOException("图片地址必须使用 HTTPS");
 
         URL url = new URL(source);
         for (int redirect = 0; redirect <= 5; redirect++) {
@@ -132,7 +132,7 @@ public final class ImageLoader {
                     if (location == null) throw new IOException("图片重定向地址缺失");
 
                     URL next = new URL(url, location);
-                    if (!UrlPolicy.isHttpUrl(next.toString())
+                    if (!UrlPolicy.isHttpsUrl(next.toString())
                             || ("https".equalsIgnoreCase(url.getProtocol())
                             && !"https".equalsIgnoreCase(next.getProtocol()))) {
                         throw new IOException("不支持的图片重定向");

@@ -2,6 +2,11 @@
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+if [[ -z "${LC_ALL:-}" ]]; then
+  if locale -a 2>/dev/null | grep -qi '^C\.utf8$'; then export LC_ALL=C.utf8
+  elif locale -a 2>/dev/null | grep -qi '^C\.UTF-8$'; then export LC_ALL=C.UTF-8
+  fi
+fi
 CHECK_DIR="$ROOT/.checks"
 mkdir -p "$CHECK_DIR"
 if [[ -n "${JDK:-${JAVA_HOME:-}}" ]]; then
@@ -15,7 +20,8 @@ echo '[1/5] Java 语法与独立逻辑测试（需要 JDK 17+，不依赖 Androi
 "$JAVA_BIN" com.sun.tools.javac.Main -encoding UTF-8 -source 8 -target 8 -d "$CHECK_DIR" \
   tests/CoreTests.java tests/ParseSources.java \
   app/src/main/java/com/gptcat/app/web/UrlPolicy.java \
-  app/src/main/java/com/gptcat/app/image/ImageSizing.java
+  app/src/main/java/com/gptcat/app/image/ImageSizing.java \
+  app/src/main/java/com/gptcat/app/download/FileNamePolicy.java
 "$JAVA_BIN" -cp "$CHECK_DIR" CoreTests
 find app/src/main/java -name '*.java' -print0 > "$CHECK_DIR/sources.list"
 sources=()

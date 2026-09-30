@@ -91,7 +91,7 @@ public final class UpdateChecker {
 
             String tag = release.optString("tag_name", "");
             String page = release.optString("html_url", "");
-            if (tag.isEmpty() || page.isEmpty()) return;
+            if (tag.isEmpty() || !isReleasePage(page)) return;
 
             String current = currentVersion(context);
             if (compareVersions(tag, current) <= 0) return;
@@ -115,6 +115,21 @@ public final class UpdateChecker {
             return info.versionName == null ? "0" : info.versionName;
         } catch (Exception e) {
             return "0";
+        }
+    }
+
+    private static boolean isReleasePage(String value) {
+        if (value == null || value.length() > 2048) return false;
+        try {
+            Uri uri = Uri.parse(value);
+            String host = uri.getHost();
+            String path = uri.getPath();
+            return "https".equalsIgnoreCase(uri.getScheme())
+                    && "github.com".equalsIgnoreCase(host)
+                    && path != null
+                    && path.startsWith("/tianlangxing-zhou/gptcat-android/");
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 

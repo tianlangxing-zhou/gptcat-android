@@ -17,6 +17,11 @@ public final class UrlPolicy {
         return host.equals("gptcat.cc") || host.endsWith(".gptcat.cc");
     }
 
+    public static boolean isHttpsUrl(String value) {
+        URI uri = parse(value);
+        return uri != null && "https".equalsIgnoreCase(uri.getScheme());
+    }
+
     public static boolean isHttpUrl(String value) {
         URI uri = parse(value);
         return uri != null && ("https".equalsIgnoreCase(uri.getScheme())

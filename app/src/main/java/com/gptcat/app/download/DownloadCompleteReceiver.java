@@ -81,8 +81,8 @@ public final class DownloadCompleteReceiver extends BroadcastReceiver {
             }
         }
 
-        notifications.notify(
-                6200 + Math.abs((int) (id % 1000)),
-                builder.build());
+        int notificationId = 0x22000000
+                | ((int) (id ^ (id >>> 32)) & 0x00ffffff);
+        notifications.notify(notificationId, builder.build());
     }
 }
